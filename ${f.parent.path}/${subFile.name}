@@ -1,0 +1,38 @@
+Summary: java.lang.NullPointerException: Attempt to invoke virtual method 'void com.baidu.crr.aQL()' on a null object reference
+	at com.baidu.input.ImeService.onFinishInput(Proguard:2427)
+	at android.inputmethodservice.InputMethodService.doFinishInput(InputMethodService.java:3418)
+	at android.inputmethodservice.InputMethodService.doStartInput(InputMethodService.java:3435)
+	at android.inputmethodservice.InputMethodService$InputMethodImpl.startInput(InputMethodService.java:876)
+
+====================================================================================================
+ErrorCode: 0x02000060
+ErrorName: App_Java_Crash
+Level: Fatal
+Timestamp: 2026-05-07 16:34:58
+PID: 9486
+UID: 1210124
+Process: com.baidu.input
+Package: com.baidu.input
+Dropped-Count: 0
+ExceptionConfig: { }
+ZipLogFile: /data/misc/ems_logs/zipLog/0x02000060_App_Java_Crash@9486_com.baidu.input_2026-05-07-16-34-58.527.zip
+ShouldUpload: true
+Flyme-Version: I2_MAX_L1_userdebug_android_c869e728_20260430_1100439_E030.0-18.4_system
+Build-Date: Thu Apr 30 20:26:01 CST 2026
+
+Description: 
+java.lang.NullPointerException: Attempt to invoke virtual method 'void com.baidu.crr.aQL()' on a null object reference
+	at com.baidu.input.ImeService.onFinishInput(Proguard:2427)
+	at android.inputmethodservice.InputMethodService.doFinishInput(InputMethodService.java:3418)
+	at android.inputmethodservice.InputMethodService.doStartInput(InputMethodService.java:3435)
+	at android.inputmethodservice.InputMethodService$InputMethodImpl.startInput(InputMethodService.java:876)
+	at android.inputmethodservice.InputMethodService$InputMethodImpl.dispatchStartInput(InputMethodService.java:905)
+	at android.inputmethodservice.IInputMethodWrapper.executeMessage(IInputMethodWrapper.java:201)
+	at com.android.internal.os.HandlerCaller$MyHandler.handleMessage(HandlerCaller.java:44)
+	at android.os.Handler.dispatchMessage(Handler.java:109)
+	at android.os.Looper.loopOnce(Looper.java:232)
+	at android.os.Looper.loop(Looper.java:317)
+	at android.app.ActivityThread.main(ActivityThread.java:8836)
+	at java.lang.reflect.Method.invoke(Native Method)
+	at com.android.internal.os.RuntimeInit$MethodAndArgsCaller.run(RuntimeInit.java:591)
+	at com.android.internal.os.ZygoteInit.main(ZygoteInit.java:888)
