@@ -319,7 +319,6 @@ class _DropAreaState extends State<DropArea> {
 
     _showActionButton();
 
-    // 如果正在播放先暂停
     if (_isPlaying) {
       try {
         await player.pause();
@@ -327,16 +326,13 @@ class _DropAreaState extends State<DropArea> {
 
       await Future.delayed(const Duration(milliseconds: 150));
     }
+
     if (videoPath == null || zipPath == null) {
       trySetState(() {
         logs.insert(0, "缺少文件\n请先拖入视频和 ZIP 文件");
       });
       return;
     }
-
-    await Future.delayed(const Duration(milliseconds: 120));
-
-    if (_disposed || !mounted) return;
 
     final timeMs = _currentPosition.inMilliseconds.clamp(0, 1 << 31).toDouble();
 
@@ -356,62 +352,68 @@ class _DropAreaState extends State<DropArea> {
     log += "范围: ±${rangeController.text}ms\n\n";
 
     try {
-      log += "[1/2] OCR识别中...\n";
+      log += "[1/2] Rust 解压日志中...\n";
 
-      final uri = Uri.parse("http://127.0.0.1:5000/ocr").replace(
-        queryParameters: {'path': videoPath, 'time': timeMs.toString()},
+      final rustResult = await processFiles(
+        targetTimestamp: "",
+        zipPath: zipPath!,
+        zipInnerDir: selectedZipDir ?? "",
+        tagKeyword: "",
+        rangeMs: 0,
       );
-
-      final response = await http.get(uri).timeout(const Duration(seconds: 10));
 
       if (_disposed || !mounted) return;
 
-      if (response.statusCode != 200) {
-        String error;
+      log += rustResult;
+      log += "\n\n";
 
-        try {
-          error = jsonDecode(response.body)['error'] ?? "未知错误";
-        } catch (_) {
-          error = response.body;
-        }
+      final lines = rustResult
+          .split('\n')
+          .map((e) => e.trim())
+          .where((e) => e.isNotEmpty)
+          .toList();
 
-        log += "OCR失败: $error\n";
+      final logDir = lines.isNotEmpty ? lines.last : "";
 
-        trySetState(() {
-          _isProcessing = false;
-          logs.insert(0, log);
-        });
-
-        _showActionButton();
-        return;
+      if (logDir.isEmpty || rustResult.contains("❌")) {
+        throw Exception("日志解压失败，无法获取日志目录:\n$rustResult");
       }
+
+      log += "[2/2] Python OCR + 日志检索中...\n";
+
+      final uri = Uri.parse("http://127.0.0.1:5000/ocr").replace(
+        queryParameters: {
+          'path': videoPath!,
+          'time': timeMs.toString(),
+          'tag': tagController.text.trim(),
+          'log_dir': logDir,
+        },
+      );
+
+      final response = await http.get(uri).timeout(const Duration(seconds: 20));
+
+      if (_disposed || !mounted) return;
 
       Map<String, dynamic> data;
 
       try {
         data = jsonDecode(response.body);
       } catch (_) {
-        throw Exception("Python返回的不是JSON:\n${response.body}");
+        throw Exception("Python 返回的不是 JSON:\n${response.body}");
       }
 
-      final timestamp = data['timestamp'] as String;
+      if (response.statusCode != 200) {
+        final error = data['error'] ?? "未知错误";
+        throw Exception("OCR失败: $error");
+      }
+
+      final timestamp = data['timestamp'] ?? "";
+      final sublime = data['sublime'];
 
       log += "OCR识别成功\n";
-      log += "时间戳: $timestamp\n\n";
-      log += "[2/2] Rust日志搜索中...\n";
-
-      final rustResult = await processFiles(
-        targetTimestamp: timestamp,
-        zipPath: zipPath!,
-        zipInnerDir: selectedZipDir ?? "",
-        tagKeyword: tagController.text.trim(),
-        rangeMs: int.tryParse(rangeController.text) ?? 500,
-      );
-
-      if (_disposed || !mounted) return;
-
-      log += "\n搜索结果:\n";
-      log += rustResult;
+      log += "时间戳: $timestamp\n";
+      log += "日志目录: $logDir\n\n";
+      log += "Sublime检索结果:\n$sublime\n";
 
       trySetState(() {
         _isProcessing = false;

@@ -6,8 +6,8 @@
 import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `build_time_keys`, `cleanup_extra_files`, `extract_all_tar_lz4_flat`, `extract_one_tar_lz4_flat`, `find_file_by_time`, `find_files_by_tag`, `is_searchable_file`, `line_contains_any_time`, `line_contains_tag`, `open_in_sublime`, `project_extract_dir`, `search_tag_in_file`
-// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `LogHit`, `PYTHON_PROCESS`
+// These functions are ignored because they are not marked as `pub`: `cleanup_extra_files`, `extract_all_tar_lz4_flat`, `extract_one_tar_lz4_flat`, `project_extract_dir`
+// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `PYTHON_PROCESS`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `deref`, `initialize`
 
 Future<void> initPythonEngine() =>
@@ -27,17 +27,11 @@ Future<void> prepareLogs({
   extractDir: extractDir,
 );
 
-Future<String?> searchInLogs({
-  required String searchDir,
-  required String targetTimestamp,
-  required String tagKeyword,
-  required int rangeMs,
-}) => RustLib.instance.api.crateApiSimpleSearchInLogs(
-  searchDir: searchDir,
-  targetTimestamp: targetTimestamp,
-  tagKeyword: tagKeyword,
-  rangeMs: rangeMs,
-);
+Future<String> getExtractDir() =>
+    RustLib.instance.api.crateApiSimpleGetExtractDir();
+
+Future<String> getLogDir({required String zipInnerDir}) =>
+    RustLib.instance.api.crateApiSimpleGetLogDir(zipInnerDir: zipInnerDir);
 
 Future<String> processFiles({
   required String targetTimestamp,
