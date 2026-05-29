@@ -233,29 +233,35 @@ fn cleanup_extra_files(extract_dir: &str) -> Result<(), String> {
 
     Ok(())
 }
-
-fn build_time_keys(target_timestamp: &str, range_ms: i32) -> Vec<String> {
+fn build_time_keys(
+    target_timestamp: &str,
+    range_ms: i32,
+) -> Vec<String> {
     let mut keys = Vec::new();
 
-    let dt = match NaiveDateTime::parse_from_str(
-        target_timestamp,
+    let target = target_timestamp.trim();
+
+    let dt = if let Ok(v) = NaiveDateTime::parse_from_str(
+        target,
         "%Y-%m-%d %H:%M:%S%.3f",
     ) {
-        Ok(v) => v,
-        Err(_) => {
-            keys.push(target_timestamp.to_string());
-
-            if target_timestamp.len() >= 14 {
-                keys.push(target_timestamp.to_string());
-            }
-
-            keys.sort();
-            keys.dedup();
-
-            return keys;
-        }
+        v
+    } else if let Ok(v) = NaiveDateTime::parse_from_str(
+        target,
+        "%Y-%m-%d %H:%M:%S",
+    ) {
+        v
+    } else if let Ok(v) = NaiveDateTime::parse_from_str(
+        &format!("2026-{}", target),
+        "%Y-%m-%d %H:%M:%S",
+    ) {
+        v
+    } else {
+        keys.push(target.to_string());
+        return keys;
     };
 
+    let step_ms = 100;
     let mut offset = -range_ms;
 
     while offset <= range_ms {
@@ -265,9 +271,8 @@ fn build_time_keys(target_timestamp: &str, range_ms: i32) -> Vec<String> {
         keys.push(t.format("%Y-%m-%d %H:%M:%S").to_string());
         keys.push(t.format("%m-%d %H:%M:%S%.3f").to_string());
         keys.push(t.format("%m-%d %H:%M:%S").to_string());
-        keys.push(t.format("%H:%M:%S").to_string());
 
-        offset += 100;
+        offset += step_ms;
     }
 
     keys.sort();

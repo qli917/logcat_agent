@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:archive/archive_io.dart';
+import 'package:bitsdojo_window/bitsdojo_window.dart';
 import 'package:debugvideoagent/AppTitleBar.dart';
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:file_picker/file_picker.dart';
@@ -10,7 +11,6 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
-import 'package:bitsdojo_window/bitsdojo_window.dart';
 
 import 'src/rust/api/simple.dart';
 import 'src/rust/frb_generated.dart';
@@ -67,9 +67,9 @@ class DropArea extends StatefulWidget {
 }
 
 class _DropAreaState extends State<DropArea> {
-  late final player = Player();
+  late final Player player = Player();
 
-  late final controller = VideoController(
+  late final VideoController controller = VideoController(
     player,
     configuration: const VideoControllerConfiguration(
       enableHardwareAcceleration: false,
@@ -87,17 +87,41 @@ class _DropAreaState extends State<DropArea> {
 
   List<String> logs = [];
 
-  String statusTitle = "准备就绪";
-  String statusSubTitle = "拖入视频和 ZIP 后开始检索";
-
   bool _isProcessing = false;
+  bool _disposed = false;
 
   double _actionOpacity = 0.2;
   Timer? _actionOpacityTimer;
 
+  Duration _currentPosition = Duration.zero;
+  Duration _duration = Duration.zero;
+  bool _isPlaying = false;
+
+  StreamSubscription<Duration>? _positionSub;
+  StreamSubscription<Duration>? _durationSub;
+  StreamSubscription<bool>? _playingSub;
+
   @override
   void initState() {
     super.initState();
+
+    _positionSub = player.stream.position.listen((position) {
+      trySetState(() {
+        _currentPosition = position;
+      });
+    });
+
+    _durationSub = player.stream.duration.listen((duration) {
+      trySetState(() {
+        _duration = duration;
+      });
+    });
+
+    _playingSub = player.stream.playing.listen((playing) {
+      trySetState(() {
+        _isPlaying = playing;
+      });
+    });
 
     if (player.platform is NativePlayer) {
       final nativePlayer = player.platform as NativePlayer;
@@ -108,12 +132,32 @@ class _DropAreaState extends State<DropArea> {
 
   @override
   void dispose() {
+    _disposed = true;
+
+    _actionOpacityTimer?.cancel();
+    _positionSub?.cancel();
+    _durationSub?.cancel();
+    _playingSub?.cancel();
+
     tagController.dispose();
     rangeController.dispose();
-    _actionOpacityTimer?.cancel();
-    stopPythonEngine();
-    player.dispose();
+
+    try {
+      stopPythonEngine();
+    } catch (_) {}
+
+    try {
+      player.dispose();
+    } catch (_) {}
+
     super.dispose();
+  }
+
+  void trySetState(VoidCallback fn) {
+    try {
+      if (!mounted || _disposed) return;
+      setState(fn);
+    } catch (_) {}
   }
 
   String fileName(String? path) {
@@ -121,28 +165,38 @@ class _DropAreaState extends State<DropArea> {
     return path.split('/').last;
   }
 
+  String _formatDuration(Duration d) {
+    final minutes = d.inMinutes.remainder(60).toString().padLeft(2, '0');
+    final seconds = d.inSeconds.remainder(60).toString().padLeft(2, '0');
+    final ms = d.inMilliseconds.remainder(1000).toString().padLeft(3, '0');
+    return "$minutes:$seconds.$ms";
+  }
+
   void _showActionButton() {
+    if (_disposed || !mounted) return;
+
     _actionOpacityTimer?.cancel();
 
-    if (mounted) {
-      setState(() {
-        _actionOpacity = 1.0;
-      });
-    }
+    trySetState(() {
+      _actionOpacity = 1.0;
+    });
 
-    _actionOpacityTimer = Timer(const Duration(seconds: 2), () {
-      if (mounted && !_isProcessing) {
-        setState(() {
+    _actionOpacityTimer = Timer(
+      const Duration(seconds: 2),
+      () {
+        if (_disposed || !mounted || _isProcessing) return;
+
+        trySetState(() {
           _actionOpacity = 0.2;
         });
-      }
-    });
+      },
+    );
   }
 
   Widget _buildFloatingStartButton() {
     return Positioned(
       right: 28,
-      bottom: 28,
+      bottom: 76,
       child: MouseRegion(
         onEnter: (_) => _showActionButton(),
         child: AnimatedOpacity(
@@ -150,14 +204,22 @@ class _DropAreaState extends State<DropArea> {
           duration: const Duration(milliseconds: 250),
           child: GestureDetector(
             onTapDown: (_) => _showActionButton(),
-            onTap: _isProcessing ? null : _startProcess,
+            onTap: _isProcessing
+                ? null
+                : () {
+                    if (_disposed || !mounted) return;
+                    _startProcess();
+                  },
             child: Container(
               width: 72,
               height: 72,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
                 gradient: const LinearGradient(
-                  colors: [Color(0xff2563eb), Color(0xff38bdf8)],
+                  colors: [
+                    Color(0xff2563eb),
+                    Color(0xff38bdf8),
+                  ],
                   begin: Alignment.topLeft,
                   end: Alignment.bottomRight,
                 ),
@@ -195,8 +257,10 @@ class _DropAreaState extends State<DropArea> {
   Future<void> _loadZipDirs(String path) async {
     try {
       final bytes = await File(path).readAsBytes();
-      final archive = ZipDecoder().decodeBytes(bytes);
 
+      if (_disposed || !mounted) return;
+
+      final archive = ZipDecoder().decodeBytes(bytes);
       final dirs = <String>{};
 
       for (final file in archive.files) {
@@ -212,84 +276,70 @@ class _DropAreaState extends State<DropArea> {
 
       final list = dirs.toList()..sort();
 
-      setState(() {
+      trySetState(() {
         zipDirs = list;
         selectedZipDir = list.isNotEmpty ? list.first : null;
       });
-    } catch (e) {
-      setState(() {
+    } catch (_) {
+      trySetState(() {
         zipDirs = [];
         selectedZipDir = null;
       });
-    }
-  }
-
-  Future<void> _pickZip() async {
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: ['zip'],
-    );
-
-    if (result != null && result.files.single.path != null) {
-      final path = result.files.single.path!;
-
-      setState(() {
-        zipPath = path;
-        zipDirs = [];
-        selectedZipDir = null;
-      });
-
-      await _loadZipDirs(path);
     }
   }
 
   Future<void> _pickVideo() async {
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: ['mp4', 'avi', 'mov', 'mkv'],
-    );
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['mp4', 'avi', 'mov', 'mkv'],
+      );
 
-    if (result != null && result.files.single.path != null) {
-      final path = result.files.single.path!;
+      if (_disposed || !mounted) return;
 
-      setState(() {
-        videoPath = path;
-      });
+      if (result != null && result.files.single.path != null) {
+        final path = result.files.single.path!;
 
-      await player.open(Media(path), play: false);
-    }
+        trySetState(() {
+          videoPath = path;
+          _currentPosition = Duration.zero;
+          _duration = Duration.zero;
+        });
+
+        await player.open(Media(path), play: false);
+      }
+    } catch (_) {}
   }
 
   void _resetConditions() {
-    setState(() {
+    trySetState(() {
       selectedZipDir = zipDirs.isNotEmpty ? zipDirs.first : null;
       tagController.clear();
       rangeController.text = "500";
       logs.clear();
-      statusTitle = "准备就绪";
-      statusSubTitle = "检索条件已重置";
     });
   }
 
   Future<void> _startProcess() async {
-    if (_isProcessing) return;
+    if (_disposed || !mounted || _isProcessing) return;
 
     _showActionButton();
 
     if (videoPath == null || zipPath == null) {
-      setState(() {
-        statusTitle = "缺少文件";
-        statusSubTitle = "请先拖入视频和 ZIP 文件";
+      trySetState(() {
+        logs.insert(0, "缺少文件\n请先拖入视频和 ZIP 文件");
       });
       return;
     }
 
-    final timeMs = player.state.position.inMilliseconds.toDouble();
+    await Future.delayed(const Duration(milliseconds: 120));
 
-    setState(() {
+    if (_disposed || !mounted) return;
+
+    final timeMs = _currentPosition.inMilliseconds.clamp(0, 1 << 31).toDouble();
+
+    trySetState(() {
       _isProcessing = true;
-      statusTitle = "处理中";
-      statusSubTitle = "正在进行 OCR 和日志检索";
     });
 
     String log = "";
@@ -299,18 +349,24 @@ class _DropAreaState extends State<DropArea> {
     log += "ZIP: ${fileName(zipPath)}\n";
     log += "当前时间: ${timeMs.toInt()} ms\n";
     log += "ZIP目录: ${selectedZipDir ?? "未选择"}\n";
-    log +=
-        "Tag: ${tagController.text.trim().isEmpty ? "无" : tagController.text.trim()}\n";
+    log += "Tag: ${tagController.text.trim().isEmpty ? "无" : tagController.text.trim()}\n";
     log += "范围: ±${rangeController.text}ms\n\n";
 
     try {
       log += "[1/2] OCR识别中...\n";
 
       final uri = Uri.parse("http://127.0.0.1:5000/ocr").replace(
-        queryParameters: {'path': videoPath, 'time': timeMs.toString()},
+        queryParameters: {
+          'path': videoPath,
+          'time': timeMs.toString(),
+        },
       );
 
-      final response = await http.get(uri).timeout(const Duration(seconds: 10));
+      final response = await http.get(uri).timeout(
+            const Duration(seconds: 10),
+          );
+
+      if (_disposed || !mounted) return;
 
       if (response.statusCode != 200) {
         String error;
@@ -323,10 +379,8 @@ class _DropAreaState extends State<DropArea> {
 
         log += "OCR失败: $error\n";
 
-        setState(() {
+        trySetState(() {
           _isProcessing = false;
-          statusTitle = "OCR失败";
-          statusSubTitle = error.toString();
           logs.insert(0, log);
         });
 
@@ -334,12 +388,18 @@ class _DropAreaState extends State<DropArea> {
         return;
       }
 
-      final data = jsonDecode(response.body);
+      Map<String, dynamic> data;
+
+      try {
+        data = jsonDecode(response.body);
+      } catch (_) {
+        throw Exception("Python返回的不是JSON:\n${response.body}");
+      }
+
       final timestamp = data['timestamp'] as String;
 
       log += "OCR识别成功\n";
       log += "时间戳: $timestamp\n\n";
-
       log += "[2/2] Rust日志搜索中...\n";
 
       final rustResult = await processFiles(
@@ -350,27 +410,24 @@ class _DropAreaState extends State<DropArea> {
         rangeMs: int.tryParse(rangeController.text) ?? 500,
       );
 
+      if (_disposed || !mounted) return;
+
       log += "\n搜索结果:\n";
       log += rustResult;
 
-      setState(() {
+      trySetState(() {
         _isProcessing = false;
-        statusTitle = rustResult.contains("⚠️") ? "未找到" : "搜索成功";
-        statusSubTitle = rustResult.contains("⚠️")
-            ? "日志中未匹配到结果"
-            : "已完成检索并找到匹配结果";
-
         logs.insert(0, log);
       });
 
       _showActionButton();
     } catch (e) {
+      if (_disposed || !mounted) return;
+
       log += "\n异常:\n$e";
 
-      setState(() {
+      trySetState(() {
         _isProcessing = false;
-        statusTitle = "流程异常";
-        statusSubTitle = e.toString();
         logs.insert(0, log);
       });
 
@@ -431,7 +488,110 @@ class _DropAreaState extends State<DropArea> {
       );
     }
 
-    return Video(controller: controller);
+    return Column(
+      children: [
+        Expanded(
+          child: Video(
+            key: ValueKey(videoPath),
+            controller: controller,
+
+            // 关键：禁用 media_kit_video 默认控制条
+            // 1.1.10 版本用这个方式
+            controls: (_) => const SizedBox.shrink(),
+          ),
+        ),
+        _buildNativeProgressBar(),
+      ],
+    );
+  }
+
+  Widget _buildNativeProgressBar() {
+    final durationMs = _duration.inMilliseconds <= 0 ? 1 : _duration.inMilliseconds;
+
+    final positionMs = _currentPosition.inMilliseconds.clamp(
+      0,
+      durationMs,
+    );
+
+    return Container(
+      height: 56,
+      padding: const EdgeInsets.symmetric(horizontal: 14),
+      decoration: const BoxDecoration(
+        color: Color(0xff050b16),
+        border: Border(
+          top: BorderSide(
+            color: Color(0xff1d3554),
+          ),
+        ),
+      ),
+      child: Row(
+        children: [
+          IconButton(
+            onPressed: () {
+              if (_isPlaying) {
+                player.pause();
+              } else {
+                player.play();
+              }
+            },
+            icon: Icon(
+              _isPlaying ? Icons.pause : Icons.play_arrow,
+              color: Colors.white70,
+            ),
+          ),
+          Text(
+            _formatDuration(Duration(milliseconds: positionMs)),
+            style: const TextStyle(
+              color: Colors.white54,
+              fontSize: 12,
+            ),
+          ),
+          Expanded(
+            child: SliderTheme(
+              data: SliderTheme.of(context).copyWith(
+                trackHeight: 3,
+                thumbShape: const RoundSliderThumbShape(
+                  enabledThumbRadius: 7,
+                ),
+              ),
+              child: Slider(
+                value: positionMs.toDouble(),
+                min: 0,
+                max: durationMs.toDouble(),
+                onChangeStart: (_) {
+                  _showActionButton();
+                },
+                onChanged: (value) {
+                  final target = Duration(milliseconds: value.toInt());
+
+                  trySetState(() {
+                    _currentPosition = target;
+                  });
+                },
+                onChangeEnd: (value) {
+                  final target = Duration(milliseconds: value.toInt());
+
+                  try {
+                    player.seek(target);
+                  } catch (_) {}
+
+                  trySetState(() {
+                    _currentPosition = target;
+                  });
+                },
+              ),
+            ),
+          ),
+          Text(
+            _formatDuration(_duration),
+            style: const TextStyle(
+              color: Colors.white54,
+              fontSize: 12,
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   Widget _buildVideoPanel() {
@@ -487,7 +647,13 @@ class _DropAreaState extends State<DropArea> {
   Widget _buildRightPanel() {
     return Padding(
       padding: const EdgeInsets.fromLTRB(10, 20, 20, 20),
-      child: Column(children: [Expanded(child: _buildLogCard())]),
+      child: Column(
+        children: [
+          Expanded(
+            child: _buildLogCard(),
+          ),
+        ],
+      ),
     );
   }
 
@@ -500,7 +666,9 @@ class _DropAreaState extends State<DropArea> {
             height: 54,
             padding: const EdgeInsets.symmetric(horizontal: 18),
             decoration: const BoxDecoration(
-              border: Border(bottom: BorderSide(color: Color(0xff1d3554))),
+              border: Border(
+                bottom: BorderSide(color: Color(0xff1d3554)),
+              ),
             ),
             child: const Row(
               children: [
@@ -574,35 +742,52 @@ class _DropAreaState extends State<DropArea> {
   }
 
   Future<void> _handleDroppedFiles(List<dynamic> files) async {
-    for (var file in files) {
-      final path = file.path as String;
+    try {
+      for (var file in files) {
+        if (_disposed || !mounted) return;
 
-      if (path.endsWith('.mp4') ||
-          path.endsWith('.avi') ||
-          path.endsWith('.mov') ||
-          path.endsWith('.mkv')) {
-        setState(() {
-          videoPath = path;
-        });
+        final path = file.path as String;
 
-        await player.open(Media(path), play: false);
-      } else if (path.endsWith('.zip')) {
-        setState(() {
-          zipPath = path;
-          zipDirs = [];
-          selectedZipDir = null;
-          logs.insert(0, "检测到ZIP文件\n${fileName(path)}\n\n开始自动解压...");
-        });
+        if (path.endsWith('.mp4') ||
+            path.endsWith('.avi') ||
+            path.endsWith('.mov') ||
+            path.endsWith('.mkv')) {
+          trySetState(() {
+            videoPath = path;
+            _currentPosition = Duration.zero;
+            _duration = Duration.zero;
+          });
 
-        await _loadZipDirs(path);
+          await player.open(Media(path), play: false);
 
-        final unzipResult = await prepareLogsForZip(zipPath: path);
+          if (_disposed || !mounted) return;
+        } else if (path.endsWith('.zip')) {
+          trySetState(() {
+            zipPath = path;
+            zipDirs = [];
+            selectedZipDir = null;
+            logs.insert(
+              0,
+              "检测到ZIP文件\n${fileName(path)}\n\n开始自动解压...",
+            );
+          });
 
-        setState(() {
-          logs.insert(0, unzipResult);
-        });
+          await _loadZipDirs(path);
+
+          if (_disposed || !mounted) return;
+
+          final unzipResult = await prepareLogsForZip(
+            zipPath: path,
+          );
+
+          if (_disposed || !mounted) return;
+
+          trySetState(() {
+            logs.insert(0, unzipResult);
+          });
+        }
       }
-    }
+    } catch (_) {}
   }
 
   @override
@@ -620,7 +805,7 @@ class _DropAreaState extends State<DropArea> {
               rangeController: rangeController,
               isProcessing: _isProcessing,
               onZipDirChanged: (value) {
-                setState(() {
+                trySetState(() {
                   selectedZipDir = value;
                 });
               },
@@ -646,8 +831,14 @@ class _DropAreaState extends State<DropArea> {
                       ),
                       child: Row(
                         children: [
-                          Expanded(flex: 2, child: _buildVideoPanel()),
-                          SizedBox(width: 620, child: _buildRightPanel()),
+                          Expanded(
+                            flex: 2,
+                            child: _buildVideoPanel(),
+                          ),
+                          SizedBox(
+                            width: 620,
+                            child: _buildRightPanel(),
+                          ),
                         ],
                       ),
                     ),
