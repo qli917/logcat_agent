@@ -87,7 +87,7 @@ Logcat Agent 通过 Flutter、Rust、Python 和 AI 分析能力组合，构建�
 
 ### 6. Tag Markdown 报告与日志流程图
 
-支持用户输入指定 Tag 或 Tag 前缀，例如 `AutoApa_`，自动提取匹配日志，生成结构化 Markdown 分析报告。
+支持用户输入指定 Tag 或 Tag 前缀，例如 `LogcatAgent`，自动提取匹配日志，生成结构化 Markdown 分析报告。
 
 目标能力：
 
