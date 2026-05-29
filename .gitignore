@@ -80,6 +80,7 @@ rust_builder/target/
 *.pth
 *.onnx
 *.engine
+*.jpg
 
 # OS
 .DS_Store
