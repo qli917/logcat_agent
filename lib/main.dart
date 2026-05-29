@@ -181,16 +181,13 @@ class _DropAreaState extends State<DropArea> {
       _actionOpacity = 1.0;
     });
 
-    _actionOpacityTimer = Timer(
-      const Duration(seconds: 2),
-      () {
-        if (_disposed || !mounted || _isProcessing) return;
+    _actionOpacityTimer = Timer(const Duration(seconds: 2), () {
+      if (_disposed || !mounted || _isProcessing) return;
 
-        trySetState(() {
-          _actionOpacity = 0.2;
-        });
-      },
-    );
+      trySetState(() {
+        _actionOpacity = 0.2;
+      });
+    });
   }
 
   Widget _buildFloatingStartButton() {
@@ -216,10 +213,7 @@ class _DropAreaState extends State<DropArea> {
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
                 gradient: const LinearGradient(
-                  colors: [
-                    Color(0xff2563eb),
-                    Color(0xff38bdf8),
-                  ],
+                  colors: [Color(0xff2563eb), Color(0xff38bdf8)],
                   begin: Alignment.topLeft,
                   end: Alignment.bottomRight,
                 ),
@@ -241,8 +235,8 @@ class _DropAreaState extends State<DropArea> {
                           color: Colors.white,
                         ),
                       )
-                    : const Icon(
-                        Icons.play_arrow,
+                    : Icon(
+                        _isPlaying ? Icons.pause : Icons.play_arrow,
                         color: Colors.white,
                         size: 36,
                       ),
@@ -325,6 +319,14 @@ class _DropAreaState extends State<DropArea> {
 
     _showActionButton();
 
+    // 如果正在播放先暂停
+    if (_isPlaying) {
+      try {
+        await player.pause();
+      } catch (_) {}
+
+      await Future.delayed(const Duration(milliseconds: 150));
+    }
     if (videoPath == null || zipPath == null) {
       trySetState(() {
         logs.insert(0, "缺少文件\n请先拖入视频和 ZIP 文件");
@@ -349,22 +351,18 @@ class _DropAreaState extends State<DropArea> {
     log += "ZIP: ${fileName(zipPath)}\n";
     log += "当前时间: ${timeMs.toInt()} ms\n";
     log += "ZIP目录: ${selectedZipDir ?? "未选择"}\n";
-    log += "Tag: ${tagController.text.trim().isEmpty ? "无" : tagController.text.trim()}\n";
+    log +=
+        "Tag: ${tagController.text.trim().isEmpty ? "无" : tagController.text.trim()}\n";
     log += "范围: ±${rangeController.text}ms\n\n";
 
     try {
       log += "[1/2] OCR识别中...\n";
 
       final uri = Uri.parse("http://127.0.0.1:5000/ocr").replace(
-        queryParameters: {
-          'path': videoPath,
-          'time': timeMs.toString(),
-        },
+        queryParameters: {'path': videoPath, 'time': timeMs.toString()},
       );
 
-      final response = await http.get(uri).timeout(
-            const Duration(seconds: 10),
-          );
+      final response = await http.get(uri).timeout(const Duration(seconds: 10));
 
       if (_disposed || !mounted) return;
 
@@ -506,23 +504,18 @@ class _DropAreaState extends State<DropArea> {
   }
 
   Widget _buildNativeProgressBar() {
-    final durationMs = _duration.inMilliseconds <= 0 ? 1 : _duration.inMilliseconds;
+    final durationMs = _duration.inMilliseconds <= 0
+        ? 1
+        : _duration.inMilliseconds;
 
-    final positionMs = _currentPosition.inMilliseconds.clamp(
-      0,
-      durationMs,
-    );
+    final positionMs = _currentPosition.inMilliseconds.clamp(0, durationMs);
 
     return Container(
       height: 56,
       padding: const EdgeInsets.symmetric(horizontal: 14),
       decoration: const BoxDecoration(
         color: Color(0xff050b16),
-        border: Border(
-          top: BorderSide(
-            color: Color(0xff1d3554),
-          ),
-        ),
+        border: Border(top: BorderSide(color: Color(0xff1d3554))),
       ),
       child: Row(
         children: [
@@ -541,53 +534,54 @@ class _DropAreaState extends State<DropArea> {
           ),
           Text(
             _formatDuration(Duration(milliseconds: positionMs)),
-            style: const TextStyle(
-              color: Colors.white54,
-              fontSize: 12,
-            ),
+            style: const TextStyle(color: Colors.white54, fontSize: 12),
           ),
           Expanded(
             child: SliderTheme(
               data: SliderTheme.of(context).copyWith(
                 trackHeight: 3,
-                thumbShape: const RoundSliderThumbShape(
-                  enabledThumbRadius: 7,
-                ),
+                thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 7),
               ),
               child: Slider(
                 value: positionMs.toDouble(),
                 min: 0,
                 max: durationMs.toDouble(),
+
                 onChangeStart: (_) {
                   _showActionButton();
                 },
+
+                // 拖动时画面实时跟着走
                 onChanged: (value) {
                   final target = Duration(milliseconds: value.toInt());
 
                   trySetState(() {
                     _currentPosition = target;
                   });
-                },
-                onChangeEnd: (value) {
-                  final target = Duration(milliseconds: value.toInt());
 
                   try {
                     player.seek(target);
                   } catch (_) {}
+                },
+
+                // 松手后再校准一次
+                onChangeEnd: (value) {
+                  final target = Duration(milliseconds: value.toInt());
 
                   trySetState(() {
                     _currentPosition = target;
                   });
+
+                  try {
+                    player.seek(target);
+                  } catch (_) {}
                 },
               ),
             ),
           ),
           Text(
             _formatDuration(_duration),
-            style: const TextStyle(
-              color: Colors.white54,
-              fontSize: 12,
-            ),
+            style: const TextStyle(color: Colors.white54, fontSize: 12),
           ),
         ],
       ),
@@ -647,13 +641,7 @@ class _DropAreaState extends State<DropArea> {
   Widget _buildRightPanel() {
     return Padding(
       padding: const EdgeInsets.fromLTRB(10, 20, 20, 20),
-      child: Column(
-        children: [
-          Expanded(
-            child: _buildLogCard(),
-          ),
-        ],
-      ),
+      child: Column(children: [Expanded(child: _buildLogCard())]),
     );
   }
 
@@ -666,9 +654,7 @@ class _DropAreaState extends State<DropArea> {
             height: 54,
             padding: const EdgeInsets.symmetric(horizontal: 18),
             decoration: const BoxDecoration(
-              border: Border(
-                bottom: BorderSide(color: Color(0xff1d3554)),
-              ),
+              border: Border(bottom: BorderSide(color: Color(0xff1d3554))),
             ),
             child: const Row(
               children: [
@@ -766,19 +752,14 @@ class _DropAreaState extends State<DropArea> {
             zipPath = path;
             zipDirs = [];
             selectedZipDir = null;
-            logs.insert(
-              0,
-              "检测到ZIP文件\n${fileName(path)}\n\n开始自动解压...",
-            );
+            logs.insert(0, "检测到ZIP文件\n${fileName(path)}\n\n开始自动解压...");
           });
 
           await _loadZipDirs(path);
 
           if (_disposed || !mounted) return;
 
-          final unzipResult = await prepareLogsForZip(
-            zipPath: path,
-          );
+          final unzipResult = await prepareLogsForZip(zipPath: path);
 
           if (_disposed || !mounted) return;
 
@@ -831,14 +812,8 @@ class _DropAreaState extends State<DropArea> {
                       ),
                       child: Row(
                         children: [
-                          Expanded(
-                            flex: 2,
-                            child: _buildVideoPanel(),
-                          ),
-                          SizedBox(
-                            width: 620,
-                            child: _buildRightPanel(),
-                          ),
+                          Expanded(flex: 2, child: _buildVideoPanel()),
+                          SizedBox(width: 620, child: _buildRightPanel()),
                         ],
                       ),
                     ),
