@@ -185,7 +185,7 @@ logcat_agent/
 
 ### 指定模块日志链路分析
 
-适合对某个业务模块或系统模块做定向分析，例如用户输入 `AutoApa_`，系统只关注相关 Tag 的日志，生成模块级日志报告和流程图。
+适合对某个业务模块或系统模块做定向分析，例如用户输入 `LogcatAgent`，系统只关注相关 Tag 的日志，生成模块级日志报告和流程图。
 
 ---
 
@@ -209,17 +209,17 @@ logcat_agent/
 Tag Markdown 报告是 Logcat Agent 的重点功能之一。用户可以输入一个完整 Tag 或 Tag 前缀，例如：
 
 ```text
-AutoApa_
+LogcatAgent
 ```
 
 系统会自动匹配相关日志，例如：
 
 ```text
-AutoApa_Manager
-AutoApa_StateMachine
-AutoApa_Perception
-AutoApa_PathPlan
-AutoApa_Ctrl
+LogcatAgent_Core
+LogcatAgent_Indexer
+LogcatAgent_OCR
+LogcatAgent_AI
+LogcatAgent_UI
 ```
 
 然后生成一个 Markdown 报告，用于快速理解该模块在日志中的执行过程。
@@ -244,12 +244,12 @@ Flutter 展示报告和流程图
 
 ### Markdown 报告示例
 
-```md
-# AutoApa_ 日志分析报告
+````md
+# LogcatAgent 日志分析报告
 
 ## 基本信息
 
-- Tag 前缀：AutoApa_
+- Tag 前缀：LogcatAgent
 - 匹配日志数量：1286 行
 - 时间范围：16:46:59.170 ~ 16:48:22.530
 - 涉及线程数：8
@@ -259,49 +259,50 @@ Flutter 展示报告和流程图
 
 | Tag | 数量 | 说明 |
 |---|---:|---|
-| AutoApa_Manager | 328 | APA 主流程控制 |
-| AutoApa_StateMachine | 246 | 状态机变化 |
-| AutoApa_PathPlan | 185 | 路径规划 |
-| AutoApa_Perception | 142 | 感知结果 |
-| AutoApa_Ctrl | 96 | 控制指令 |
+| LogcatAgent_Core | 328 | 主流程调度 |
+| LogcatAgent_Indexer | 246 | 日志索引构建 |
+| LogcatAgent_OCR | 185 | 时间戳识别 |
+| LogcatAgent_AI | 142 | AI 日志分析 |
+| LogcatAgent_UI | 96 | 界面交互 |
 
 ## 关键时间线
 
-- 16:46:59.170 APA 功能启动 [查看原始日志](logcat://entry/1024)
-- 16:47:01.230 状态切换到 SearchingSlot [查看原始日志](logcat://entry/1088)
-- 16:47:05.610 检测到车位 [查看原始日志](logcat://entry/1210)
-- 16:47:08.320 开始路径规划 [查看原始日志](logcat://entry/1342)
-- 16:47:11.900 控制模块下发泊车指令 [查看原始日志](logcat://entry/1511)
+- 16:46:59.170 开始导入日志包 [查看原始日志](logcat://entry/1024)
+- 16:47:01.230 解压完成并开始扫描日志文件 [查看原始日志](logcat://entry/1088)
+- 16:47:05.610 时间戳索引构建完成 [查看原始日志](logcat://entry/1210)
+- 16:47:08.320 OCR 识别到目标时间点 [查看原始日志](logcat://entry/1342)
+- 16:47:11.900 生成 AI 分析报告 [查看原始日志](logcat://entry/1511)
 
 ## 流程图
 
 ```mermaid
 sequenceDiagram
-    participant Manager as AutoApa_Manager
-    participant State as AutoApa_StateMachine
-    participant Perception as AutoApa_Perception
-    participant Plan as AutoApa_PathPlan
-    participant Ctrl as AutoApa_Ctrl
+    participant UI as LogcatAgent_UI
+    participant Core as LogcatAgent_Core
+    participant Indexer as LogcatAgent_Indexer
+    participant OCR as LogcatAgent_OCR
+    participant AI as LogcatAgent_AI
 
-    Manager->>State: Start APA
-    State->>Perception: Search parking slot
-    Perception->>State: Slot detected
-    State->>Plan: Request path planning
-    Plan->>Ctrl: Send trajectory
-    Ctrl->>Manager: Execute parking control
+    UI->>Core: Import log package
+    Core->>Indexer: Build log index
+    UI->>OCR: Recognize timestamp
+    OCR->>Core: Return target timestamp
+    Core->>Indexer: Query matched log lines
+    Core->>AI: Analyze log context
+    AI->>UI: Return Markdown report
 ```
 
 ## 可疑日志
 
 ### Warning
 
-- 16:47:06.120 AutoApa_Perception: slot confidence low [查看](logcat://entry/1233)
-- 16:47:09.880 AutoApa_PathPlan: replan triggered [查看](logcat://entry/1402)
+- 16:47:06.120 LogcatAgent_Indexer: timestamp parse failed [查看](logcat://entry/1233)
+- 16:47:09.880 LogcatAgent_OCR: low confidence timestamp result [查看](logcat://entry/1402)
 
 ### Error
 
-- 16:47:12.230 AutoApa_Ctrl: control timeout [查看](logcat://entry/1566)
-```
+- 16:47:12.230 LogcatAgent_AI: request timeout [查看](logcat://entry/1566)
+````
 
 ### 跳转设计
 
@@ -341,7 +342,7 @@ CREATE TABLE log_entries (
 ```sql
 SELECT *
 FROM log_entries
-WHERE tag LIKE 'AutoApa_%'
+WHERE tag LIKE 'LogcatAgent%'
 ORDER BY timestamp ASC;
 ```
 
@@ -446,15 +447,7 @@ Logcat Agent 的目标不是简单做一个日志查看器，而是做一个面�
 
 ## 安全说明
 
-请不要将以下敏感内容提交到仓库：
-
-- API Key
-- OpenAI / ChatGPT Token
-- SSH 私钥
-- 真实用户日志
-- 私人测试数据
-- `.env` 配置文件
-- 包含隐私信息的数据库文件
+请不要将敏感配置、真实用户日志、私人测试数据、环境配置文件或包含隐私信息的数据库文件提交到仓库。
 
 ---
 
