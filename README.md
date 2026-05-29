@@ -1,158 +1,204 @@
 # Logcat Agent
 
-AI-Powered Android Log Analysis Tool
+> AI-Powered Android Video → Logcat Locator
 
-Logcat Agent 是一个面向 Android 开发、测试、AOSP 与 Framework 工程师的日志定位工具。
+Automatically locate Android logs from screen recordings.
 
-核心目标：
+Flutter • Rust • Python • OCR
 
-```text
-录屏 -> OCR识别时间戳 -> 自动解压日志 -> 定位对应日志 -> Sublime打开
-```
+---
 
-## 为什么做这个项目
-
-传统排查流程：
+## 🚀 Demo Flow
 
 ```text
-查看录屏
- ↓
-人工记录时间
- ↓
-解压日志包
- ↓
-搜索时间戳
- ↓
-搜索Tag
- ↓
-定位问题
+🎥 Video Recording
+        ↓
+🤖 OCR Timestamp
+        ↓
+⚡ Rust Extraction
+        ↓
+🔍 Log Search
+        ↓
+📝 Sublime Jump
 ```
 
-当日志包达到数百 MB 甚至数 GB 时，定位问题会非常耗时。
+---
 
-Logcat Agent 将这一过程自动化。
+## ✨ Features
 
-## 当前功能
+- 🎥 Video timestamp recognition
+- ⚡ High-speed ZIP / tar.lz4 extraction
+- 🔍 Automatic Logcat location
+- 📝 Sublime Text integration
+- 🖥 Flutter Desktop UI
+- 🤖 OCR powered by CRNN
+- 📦 Android Export Log support
 
-- 视频时间戳 OCR 识别
-- Android Export Log 自动解压
-- ZIP / tar.lz4 处理
-- OCR 时间自动定位日志
-- Tag 辅助搜索
-- 一键跳转 Sublime Text
-- Flutter 桌面端界面
+---
 
-## 技术架构
+## 🎯 Why Logcat Agent
+
+Traditional workflow:
+
+```text
+Recording
+ ↓
+Watch video
+ ↓
+Remember time
+ ↓
+Extract logs
+ ↓
+Search timestamp
+ ↓
+Search tag
+ ↓
+Locate issue
+```
+
+Logcat Agent:
+
+```text
+Recording
+ ↓
+Click
+ ↓
+Done
+```
+
+---
+
+## 🏗 Architecture
 
 ```text
 Flutter
- │
- ├─ 视频播放
- ├─ 拖拽日志包
- └─ UI交互
- │
- ▼
+   │
+   ├── Video Player
+   ├── Timeline
+   └── Drag & Drop
+   │
+   ▼
 Rust
- │
- ├─ ZIP解压
- ├─ tar.lz4解压
- └─ 日志目录整理
- │
- ▼
+   ├── ZIP Extract
+   ├── tar.lz4 Extract
+   └── Log Directory Builder
+   │
+   ▼
 Python
- │
- ├─ CRNN OCR
- ├─ 时间戳识别
- ├─ 日志搜索
- └─ Sublime联动
- │
- ▼
+   ├── OCR
+   ├── Timestamp Parsing
+   ├── Log Search
+   └── Sublime Launcher
+   │
+   ▼
 Sublime Text
- │
- └─ 打开并定位日志
 ```
 
-## 技术栈
+---
+
+## 🛠 Tech Stack
 
 ### Frontend
-
 - Flutter
 - media_kit
 - desktop_drop
 - flutter_rust_bridge
 
 ### Backend
-
 - Rust
 - Python
 
 ### AI
-
 - PyTorch
 - CRNN OCR
 
-### Platform
+---
 
-- Linux
-- Ubuntu
-- Android Logcat
-
-## 工作流程
+## 📋 Workflow
 
 ```text
-拖入录屏
+Drag Video
  ↓
-拖入日志ZIP
+Drag Android Export Log
  ↓
-定位问题时间点
+Locate Problem Frame
  ↓
-OCR识别时间戳
+OCR Timestamp
  ↓
-Rust自动解压日志
+Rust Extract Logs
  ↓
-Python搜索日志
+Python Search Logs
  ↓
-Sublime打开对应位置
+Open Sublime At Exact Line
 ```
 
-## 项目定位
+---
 
-适用于：
+## 🎯 Use Cases
 
-- Android App 开发
+- Android App Development
 - Android Framework
-- AOSP 开发
-- ROM 开发
-- Kernel 开发
-- 测试工程师
-- 系统调试工程师
+- AOSP Development
+- ROM Development
+- Kernel Development
+- QA Testing
+- System Debugging
 
-## Roadmap
+---
 
-### v1
+## 📸 Screenshots
 
-- [x] Flutter桌面端
-- [x] 视频时间戳OCR
-- [x] ZIP日志解压
-- [x] tar.lz4解压
-- [x] Sublime联动
+### Main Window
 
-### v2
+Add screenshots and demo GIF here.
 
-- [ ] AI日志分析
-- [ ] ChatGPT集成
-- [ ] 多日志包搜索
-- [ ] 自动问题归因
+---
 
-### v3
+## ⚡ Performance
 
-- [ ] Agent模式
-- [ ] 自动生成分析报告
-- [ ] Android问题诊断助手
+Environment:
 
-## Star
+```text
+Ubuntu
+Intel i7
+32GB RAM
+NVMe SSD
+```
 
-如果项目对你有帮助，欢迎 Star ⭐
+Typical Results:
+
+```text
+OCR               < 1s
+ZIP Extraction    Seconds
+Log Location      Seconds
+```
+
+---
+
+## 🗺 Roadmap
+
+### Current
+- [x] OCR Timestamp Recognition
+- [x] Android Export Log Extraction
+- [x] Log Location
+- [x] Sublime Integration
+
+### Next
+- [ ] ChatGPT Log Analysis
+- [ ] AI Root Cause Analysis
+- [ ] Multi Log Package Search
+- [ ] Markdown Report Generation
+
+### Future
+- [ ] Android Log Agent
+- [ ] Autonomous Debug Assistant
+- [ ] AI-generated Debug Reports
+
+---
+
+## ⭐ Star
+
+If this project helps you, please give it a Star.
 
 Repository:
 https://github.com/qli917/logcat_agent
