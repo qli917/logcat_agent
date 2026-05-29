@@ -85,6 +85,19 @@ Logcat Agent 通过 Flutter、Rust、Python 和 AI 分析能力组合，构建�
 - 高亮选中目标日志行
 - 一键提交 AI 分析
 
+### 6. Tag Markdown 报告与日志流程图
+
+支持用户输入指定 Tag 或 Tag 前缀，例如 `AutoApa_`，自动提取匹配日志，生成结构化 Markdown 分析报告。
+
+目标能力：
+
+- 根据 Tag / Tag 前缀筛选日志
+- 汇总相关 Tag 的日志数量和时间范围
+- 生成关键时间线
+- 生成 Mermaid 日志流程图
+- 标记 warning / error / crash 等可疑日志
+- 通过内部链接跳转到原始日志具体位置
+
 ---
 
 ## 技术架构
@@ -170,6 +183,10 @@ logcat_agent/
 
 适合 Android 系统开发中对 logcat、kernel log、系统服务日志进行辅助分析。
 
+### 指定模块日志链路分析
+
+适合对某个业务模块或系统模块做定向分析，例如用户输入 `AutoApa_`，系统只关注相关 Tag 的日志，生成模块级日志报告和流程图。
+
 ---
 
 ## 基本流程
@@ -183,6 +200,155 @@ logcat_agent/
 6. Flutter 展示命中的日志行
 7. 调用 ChatGPT API 分析日志上下文
 8. 输出问题原因和排查建议
+```
+
+---
+
+## Tag Markdown 报告设计
+
+Tag Markdown 报告是 Logcat Agent 的重点功能之一。用户可以输入一个完整 Tag 或 Tag 前缀，例如：
+
+```text
+AutoApa_
+```
+
+系统会自动匹配相关日志，例如：
+
+```text
+AutoApa_Manager
+AutoApa_StateMachine
+AutoApa_Perception
+AutoApa_PathPlan
+AutoApa_Ctrl
+```
+
+然后生成一个 Markdown 报告，用于快速理解该模块在日志中的执行过程。
+
+### 处理流程
+
+```text
+用户输入 Tag / Tag 前缀
+   ↓
+Rust 从日志索引中筛选匹配日志
+   ↓
+SQLite 返回日志 ID、时间、Tag、文件路径、行号、byte offset
+   ↓
+AI 分析关键阶段、异常点和状态变化
+   ↓
+生成 Markdown 报告
+   ↓
+Flutter 展示报告和流程图
+   ↓
+点击链接跳转到原始日志具体行
+```
+
+### Markdown 报告示例
+
+```md
+# AutoApa_ 日志分析报告
+
+## 基本信息
+
+- Tag 前缀：AutoApa_
+- 匹配日志数量：1286 行
+- 时间范围：16:46:59.170 ~ 16:48:22.530
+- 涉及线程数：8
+- 涉及进程数：2
+
+## Tag 汇总
+
+| Tag | 数量 | 说明 |
+|---|---:|---|
+| AutoApa_Manager | 328 | APA 主流程控制 |
+| AutoApa_StateMachine | 246 | 状态机变化 |
+| AutoApa_PathPlan | 185 | 路径规划 |
+| AutoApa_Perception | 142 | 感知结果 |
+| AutoApa_Ctrl | 96 | 控制指令 |
+
+## 关键时间线
+
+- 16:46:59.170 APA 功能启动 [查看原始日志](logcat://entry/1024)
+- 16:47:01.230 状态切换到 SearchingSlot [查看原始日志](logcat://entry/1088)
+- 16:47:05.610 检测到车位 [查看原始日志](logcat://entry/1210)
+- 16:47:08.320 开始路径规划 [查看原始日志](logcat://entry/1342)
+- 16:47:11.900 控制模块下发泊车指令 [查看原始日志](logcat://entry/1511)
+
+## 流程图
+
+```mermaid
+sequenceDiagram
+    participant Manager as AutoApa_Manager
+    participant State as AutoApa_StateMachine
+    participant Perception as AutoApa_Perception
+    participant Plan as AutoApa_PathPlan
+    participant Ctrl as AutoApa_Ctrl
+
+    Manager->>State: Start APA
+    State->>Perception: Search parking slot
+    Perception->>State: Slot detected
+    State->>Plan: Request path planning
+    Plan->>Ctrl: Send trajectory
+    Ctrl->>Manager: Execute parking control
+```
+
+## 可疑日志
+
+### Warning
+
+- 16:47:06.120 AutoApa_Perception: slot confidence low [查看](logcat://entry/1233)
+- 16:47:09.880 AutoApa_PathPlan: replan triggered [查看](logcat://entry/1402)
+
+### Error
+
+- 16:47:12.230 AutoApa_Ctrl: control timeout [查看](logcat://entry/1566)
+```
+
+### 跳转设计
+
+Markdown 中不直接暴露本地文件路径，而是使用内部协议链接：
+
+```md
+[查看原始日志](logcat://entry/1024)
+```
+
+Flutter 拦截 `logcat://entry/1024` 后，从 SQLite 查询对应的日志位置：
+
+```text
+entry_id → file_path → line_number → byte_offset
+```
+
+然后在原始日志查看器中跳转到对应文件和行号，并高亮目标日志。
+
+### 建议的索引字段
+
+```sql
+CREATE TABLE log_entries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp TEXT,
+    level TEXT,
+    pid TEXT,
+    tid TEXT,
+    tag TEXT,
+    message TEXT,
+    file_path TEXT,
+    line_number INTEGER,
+    byte_offset INTEGER
+);
+```
+
+查询指定 Tag 前缀：
+
+```sql
+SELECT *
+FROM log_entries
+WHERE tag LIKE 'AutoApa_%'
+ORDER BY timestamp ASC;
+```
+
+这个设计可以让 Logcat Agent 不只是查看日志，而是形成：
+
+```text
+Tag 过滤 → 日志聚合 → 时间线 → 流程图 → AI 分析 → 原始日志跳转
 ```
 
 ---
@@ -236,6 +402,9 @@ cargo build --release
 - [ ] 建立 SQLite 日志时间索引
 - [ ] 优化 OCR 时间戳识别准确率
 - [ ] 支持按时间快速定位日志行
+- [ ] 支持指定 Tag / Tag 前缀生成 Markdown 报告
+- [ ] 支持 Markdown 内部链接跳转原始日志
+- [ ] 支持 Mermaid 日志流程图生成
 - [ ] 集成 ChatGPT API 日志分析
 - [ ] 增加错误样本收集和模型迭代能力
 
@@ -248,6 +417,8 @@ cargo build --release
 - 支持日志上下文自动截取
 - 支持错误类型自动分类
 - 支持 crash / ANR 专项分析
+- 支持 Tag 级日志报告导出
+- 支持 Markdown / HTML 报告导出
 - 支持模型本地化部署
 - 支持 Windows / Linux / macOS 桌面端
 
@@ -261,6 +432,12 @@ Logcat Agent 的目标不是简单做一个日志查看器，而是做一个面�
 
 ```text
 录屏时间点 → OCR 时间识别 → 日志定位 → 上下文提取 → AI 分析
+```
+
+以及：
+
+```text
+指定 Tag → 日志聚合 → 时间线 → 流程图 → Markdown 报告 → 原始日志跳转
 ```
 
 这一整套自动化流程。
