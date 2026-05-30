@@ -6,6 +6,7 @@ import torch
 import logging
 import numpy as np
 import subprocess
+import json
 from flask import Flask, request, jsonify
 from datetime import datetime
 from collections import Counter
@@ -26,8 +27,10 @@ PROJECT_ROOT = os.path.dirname(BASE_DIR)
 MODEL_PATH = os.path.join(BASE_DIR, "timestamp_crnn_best.pt")
 DEBUG_ROOT = os.path.join(BASE_DIR, "debug_ocr")
 DEFAULT_EXTRACT_DIR = os.path.join(PROJECT_ROOT, "log_hunter_extracted")
+SUBTITLE_ROOT = os.path.join(PROJECT_ROOT, "log_hunter_subtitles")
 
 os.makedirs(DEBUG_ROOT, exist_ok=True)
+os.makedirs(SUBTITLE_ROOT, exist_ok=True)
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -106,6 +109,112 @@ logger.info("timestamp_crnn_best.pt 加载成功")
 logger.info(f"DEVICE: {DEVICE}")
 logger.info(f"IMG_W: {IMG_W}, IMG_H: {IMG_H}")
 logger.info(f"ALPHABET: {ALPHABET}")
+
+WHISPER_MODEL = None
+
+
+def get_whisper_model():
+    global WHISPER_MODEL
+
+    if WHISPER_MODEL is not None:
+        return WHISPER_MODEL
+
+    try:
+        from faster_whisper import WhisperModel
+    except Exception as e:
+        raise RuntimeError(
+            "缺少 faster_whisper，请先安装 Python 依赖: pip install faster-whisper"
+        ) from e
+
+    model_size = os.environ.get("LOGCAT_AGENT_WHISPER_MODEL", "small")
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    compute_type = "float16" if device == "cuda" else "int8"
+
+    WHISPER_MODEL = WhisperModel(
+        model_size,
+        device=device,
+        compute_type=compute_type,
+    )
+
+    logger.info(
+        "Faster-Whisper 加载成功 model=%s device=%s compute_type=%s",
+        model_size,
+        device,
+        compute_type,
+    )
+
+    return WHISPER_MODEL
+
+
+def normalize_bug_description(segments):
+    texts = [
+        item.get("text", "").strip()
+        for item in segments
+        if item.get("text", "").strip()
+    ]
+
+    text = "，".join(texts)
+    text = re.sub(r"\s+", "", text)
+    text = re.sub(r"，+", "，", text).strip("，。 ")
+
+    if text and text[-1] not in "。！？!?":
+        text += "。"
+
+    return text
+
+
+def subtitles_output_path(audio_path):
+    base = os.path.splitext(os.path.basename(audio_path))[0]
+    return os.path.join(SUBTITLE_ROOT, f"{base}_subtitles.json")
+
+
+def transcribe_audio(audio_path):
+    if not os.path.exists(audio_path):
+        raise FileNotFoundError(f"音频文件不存在: {audio_path}")
+
+    model = get_whisper_model()
+
+    segments_iter, info = model.transcribe(
+        audio_path,
+        language="zh",
+        vad_filter=True,
+        beam_size=5,
+    )
+
+    subtitles = []
+
+    for segment in segments_iter:
+        text = (segment.text or "").strip()
+
+        if not text:
+            continue
+
+        subtitles.append({
+            "start": round(float(segment.start), 3),
+            "end": round(float(segment.end), 3),
+            "text": text,
+        })
+
+    bug_description = normalize_bug_description(subtitles)
+    output_path = subtitles_output_path(audio_path)
+
+    payload = {
+        "audio_path": audio_path,
+        "language": getattr(info, "language", "zh"),
+        "language_probability": round(
+            float(getattr(info, "language_probability", 0.0)),
+            4,
+        ),
+        "bug_description": bug_description,
+        "subtitles": subtitles,
+    }
+
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+
+    payload["subtitles_path"] = output_path
+
+    return payload
 
 
 def save_image(path, img):
@@ -847,6 +956,27 @@ def extract_timestamp():
         }), 500
 
 
+@app.route("/transcribe", methods=["GET"])
+def transcribe_subtitles():
+    try:
+        audio_path = request.args.get("audio_path", "")
+
+        if not audio_path:
+            return jsonify({"error": "missing audio_path"}), 400
+
+        payload = transcribe_audio(audio_path)
+
+        return jsonify(payload), 200
+
+    except Exception as e:
+        logger.exception("语音识别接口异常")
+
+        return jsonify({
+            "error": str(e),
+            "type": type(e).__name__,
+        }), 500
+
+
 @app.route("/debug_path", methods=["GET"])
 def debug_path():
     return jsonify({
@@ -854,6 +984,7 @@ def debug_path():
         "project_root": PROJECT_ROOT,
         "debug_root": DEBUG_ROOT,
         "default_extract_dir": DEFAULT_EXTRACT_DIR,
+        "subtitle_root": SUBTITLE_ROOT,
         "model_path": MODEL_PATH,
         "model_exists": os.path.exists(MODEL_PATH),
         "device": DEVICE,

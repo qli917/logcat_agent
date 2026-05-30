@@ -46,6 +46,40 @@ flutter_rust_bridge::frb_generated_default_handler!();
 
 // Section: wire_funcs
 
+fn wire__crate__api__simple__extract_audio_from_video_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "extract_audio_from_video",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_video_path = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok = crate::api::simple::extract_audio_from_video(api_video_path)?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+
 fn wire__crate__api__simple__get_extract_dir_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -356,6 +390,12 @@ fn pde_ffi_dispatcher_primary_impl(
         5 => wire__crate__api__simple__prepare_logs_for_zip_impl(port, ptr, rust_vec_len, data_len),
         6 => wire__crate__api__simple__process_files_impl(port, ptr, rust_vec_len, data_len),
         7 => wire__crate__api__simple__stop_python_engine_impl(port, ptr, rust_vec_len, data_len),
+        8 => wire__crate__api__simple__extract_audio_from_video_impl(
+            port,
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
         _ => unreachable!(),
     }
 }

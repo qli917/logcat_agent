@@ -16,6 +16,11 @@ Future<void> initPythonEngine() =>
 Future<void> stopPythonEngine() =>
     RustLib.instance.api.crateApiSimpleStopPythonEngine();
 
+Future<String> extractAudioFromVideo({required String videoPath}) => RustLib
+    .instance
+    .api
+    .crateApiSimpleExtractAudioFromVideo(videoPath: videoPath);
+
 Future<String> prepareLogsForZip({required String zipPath}) =>
     RustLib.instance.api.crateApiSimplePrepareLogsForZip(zipPath: zipPath);
 

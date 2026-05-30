@@ -76,6 +76,10 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
 }
 
 abstract class RustLibApi extends BaseApi {
+  Future<String> crateApiSimpleExtractAudioFromVideo({
+    required String videoPath,
+  });
+
   Future<String> crateApiSimpleGetExtractDir();
 
   Future<String> crateApiSimpleGetLogDir({required String zipInnerDir});
@@ -107,6 +111,39 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     required super.generalizedFrbRustBinding,
     required super.portManager,
   });
+
+  @override
+  Future<String> crateApiSimpleExtractAudioFromVideo({
+    required String videoPath,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(videoPath, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 8,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiSimpleExtractAudioFromVideoConstMeta,
+        argValues: [videoPath],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiSimpleExtractAudioFromVideoConstMeta =>
+      const TaskConstMeta(
+        debugName: "extract_audio_from_video",
+        argNames: ["videoPath"],
+      );
 
   @override
   Future<String> crateApiSimpleGetExtractDir() {

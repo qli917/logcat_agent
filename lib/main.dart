@@ -59,6 +59,31 @@ class MyApp extends StatelessWidget {
   }
 }
 
+class SubtitleSegment {
+  final double start;
+  final double end;
+  final String text;
+
+  const SubtitleSegment({
+    required this.start,
+    required this.end,
+    required this.text,
+  });
+
+  factory SubtitleSegment.fromJson(Map<String, dynamic> json) {
+    return SubtitleSegment(
+      start: (json['start'] as num?)?.toDouble() ?? 0,
+      end: (json['end'] as num?)?.toDouble() ?? 0,
+      text: (json['text'] ?? '').toString(),
+    );
+  }
+
+  bool contains(Duration position) {
+    final seconds = position.inMilliseconds / 1000.0;
+    return seconds >= start && seconds <= end;
+  }
+}
+
 class DropArea extends StatefulWidget {
   const DropArea({super.key});
 
@@ -86,8 +111,12 @@ class _DropAreaState extends State<DropArea> {
   final rangeController = TextEditingController(text: "500");
 
   List<String> logs = [];
+  List<SubtitleSegment> subtitles = [];
+  String bugDescription = "";
+  String? subtitlesPath;
 
   bool _isProcessing = false;
+  bool _isVoiceProcessing = false;
   bool _disposed = false;
 
   double _actionOpacity = 0.2;
@@ -298,6 +327,9 @@ class _DropAreaState extends State<DropArea> {
           videoPath = path;
           _currentPosition = Duration.zero;
           _duration = Duration.zero;
+          subtitles.clear();
+          bugDescription = "";
+          subtitlesPath = null;
         });
 
         await player.open(Media(path), play: false);
@@ -310,8 +342,93 @@ class _DropAreaState extends State<DropArea> {
       selectedZipDir = zipDirs.isNotEmpty ? zipDirs.first : null;
       tagController.clear();
       rangeController.text = "500";
+      subtitles.clear();
+      bugDescription = "";
+      subtitlesPath = null;
       logs.clear();
     });
+  }
+
+  String _currentSubtitleText() {
+    for (final subtitle in subtitles) {
+      if (subtitle.contains(_currentPosition)) {
+        return subtitle.text;
+      }
+    }
+
+    return "";
+  }
+
+  Future<void> _extractBugVoice() async {
+    if (_disposed || !mounted || _isVoiceProcessing) return;
+
+    if (videoPath == null) {
+      trySetState(() {
+        logs.insert(0, "缺少视频\n请先拖入或选择视频文件");
+      });
+      return;
+    }
+
+    trySetState(() {
+      _isVoiceProcessing = true;
+      logs.insert(0, "开始语音识别\n视频: ${fileName(videoPath)}");
+    });
+
+    try {
+      final audioPath = await extractAudioFromVideo(videoPath: videoPath!);
+
+      if (_disposed || !mounted) return;
+
+      final uri = Uri.parse("http://127.0.0.1:5000/transcribe").replace(
+        queryParameters: {
+          'audio_path': audioPath,
+        },
+      );
+
+      final response = await http.get(uri).timeout(const Duration(minutes: 5));
+
+      if (_disposed || !mounted) return;
+
+      Map<String, dynamic> data;
+
+      try {
+        data = jsonDecode(response.body);
+      } catch (_) {
+        throw Exception("Python 返回的不是 JSON:\n${response.body}");
+      }
+
+      if (response.statusCode != 200) {
+        final error = data['error'] ?? "未知错误";
+        throw Exception("语音识别失败: $error");
+      }
+
+      final rawSubtitles = data['subtitles'];
+      final parsedSubtitles = rawSubtitles is List
+          ? rawSubtitles
+              .whereType<Map<String, dynamic>>()
+              .map(SubtitleSegment.fromJson)
+              .toList()
+          : <SubtitleSegment>[];
+
+      trySetState(() {
+        subtitles = parsedSubtitles;
+        bugDescription = (data['bug_description'] ?? '').toString();
+        subtitlesPath = (data['subtitles_path'] ?? '').toString();
+        _isVoiceProcessing = false;
+        logs.insert(
+          0,
+          "语音识别完成\n音频: $audioPath\n字幕: ${subtitlesPath ?? ""}\n"
+          "字幕片段: ${subtitles.length}\n\nBug描述:\n$bugDescription",
+        );
+      });
+    } catch (e) {
+      if (_disposed || !mounted) return;
+
+      trySetState(() {
+        _isVoiceProcessing = false;
+        logs.insert(0, "语音识别异常\n$e");
+      });
+    }
   }
 
   Future<void> _startProcess() async {
@@ -500,8 +617,39 @@ class _DropAreaState extends State<DropArea> {
             controls: (_) => const SizedBox.shrink(),
           ),
         ),
+        _buildSubtitleBar(),
         _buildNativeProgressBar(),
       ],
+    );
+  }
+
+  Widget _buildSubtitleBar() {
+    final text = _currentSubtitleText();
+
+    return Container(
+      width: double.infinity,
+      constraints: const BoxConstraints(minHeight: 44),
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+      decoration: const BoxDecoration(
+        color: Color(0xff08111f),
+        border: Border(top: BorderSide(color: Color(0xff1d3554))),
+      ),
+      child: Center(
+        child: Text(
+          text.isEmpty
+              ? (_isVoiceProcessing ? "语音识别中..." : "暂无字幕")
+              : text,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            color: text.isEmpty ? Colors.white38 : Colors.white,
+            fontSize: 15,
+            height: 1.35,
+            fontWeight: text.isEmpty ? FontWeight.normal : FontWeight.w600,
+          ),
+        ),
+      ),
     );
   }
 
@@ -600,22 +748,42 @@ class _DropAreaState extends State<DropArea> {
               padding: const EdgeInsets.all(14),
               child: Column(
                 children: [
-                  const Row(
+                  Row(
                     children: [
-                      Icon(
+                      const Icon(
                         Icons.travel_explore,
                         color: Color(0xff3bbcff),
                         size: 20,
                       ),
-                      SizedBox(width: 8),
-                      Text(
+                      const SizedBox(width: 8),
+                      const Text(
                         "视频预览",
                         style: TextStyle(
                           fontWeight: FontWeight.bold,
                           fontSize: 15,
                         ),
                       ),
-                      Icon(Icons.more_horiz, color: Colors.white70),
+                      const Spacer(),
+                      TextButton.icon(
+                        onPressed: _isVoiceProcessing
+                            ? null
+                            : () {
+                                _extractBugVoice();
+                              },
+                        icon: _isVoiceProcessing
+                            ? const SizedBox(
+                                width: 14,
+                                height: 14,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : const Icon(Icons.subtitles_outlined, size: 16),
+                        label: Text(
+                          _isVoiceProcessing ? "识别中" : "语音字幕",
+                          style: const TextStyle(fontSize: 12),
+                        ),
+                      ),
                     ],
                   ),
                   const SizedBox(height: 14),
@@ -643,7 +811,68 @@ class _DropAreaState extends State<DropArea> {
   Widget _buildRightPanel() {
     return Padding(
       padding: const EdgeInsets.fromLTRB(10, 20, 20, 20),
-      child: Column(children: [Expanded(child: _buildLogCard())]),
+      child: Column(
+        children: [
+          _buildBugDescriptionCard(),
+          const SizedBox(height: 14),
+          Expanded(child: _buildLogCard()),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBugDescriptionCard() {
+    return _glassCard(
+      padding: const EdgeInsets.all(14),
+      child: SizedBox(
+        width: double.infinity,
+        height: 118,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(
+                  Icons.record_voice_over_outlined,
+                  color: Color(0xff38bdf8),
+                  size: 18,
+                ),
+                const SizedBox(width: 8),
+                const Text(
+                  "Bug语音描述",
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                ),
+                const Spacer(),
+                if (subtitles.isNotEmpty)
+                  Text(
+                    "${subtitles.length}段",
+                    style: const TextStyle(
+                      color: Colors.white38,
+                      fontSize: 12,
+                    ),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Expanded(
+              child: SingleChildScrollView(
+                child: SelectableText(
+                  bugDescription.isEmpty
+                      ? (_isVoiceProcessing ? "正在提取录屏语音..." : "暂无语音描述")
+                      : bugDescription,
+                  style: TextStyle(
+                    color: bugDescription.isEmpty
+                        ? Colors.white38
+                        : Colors.white70,
+                    fontSize: 13,
+                    height: 1.45,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -744,6 +973,9 @@ class _DropAreaState extends State<DropArea> {
             videoPath = path;
             _currentPosition = Duration.zero;
             _duration = Duration.zero;
+            subtitles.clear();
+            bugDescription = "";
+            subtitlesPath = null;
           });
 
           await player.open(Media(path), play: false);

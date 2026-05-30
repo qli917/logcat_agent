@@ -2,6 +2,7 @@ use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use lazy_static::lazy_static;
 use lz4::Decoder;
@@ -51,6 +52,70 @@ fn project_extract_dir() -> String {
             .unwrap()
             .to_string_lossy()
     )
+}
+
+fn project_audio_dir() -> Result<PathBuf, String> {
+    let dir = std::env::current_dir()
+        .map_err(|e| format!("获取项目目录失败: {}", e))?
+        .join("log_hunter_audio");
+
+    fs::create_dir_all(&dir)
+        .map_err(|e| format!("创建音频目录失败: {}", e))?;
+
+    Ok(dir)
+}
+
+pub fn extract_audio_from_video(video_path: String) -> Result<String, String> {
+    let video = Path::new(&video_path);
+
+    if !video.exists() {
+        return Err(format!("视频文件不存在: {}", video_path));
+    }
+
+    let stem = video
+        .file_stem()
+        .map(|v| v.to_string_lossy().to_string())
+        .unwrap_or_else(|| "video".to_string())
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|e| format!("获取时间失败: {}", e))?
+        .as_millis();
+
+    let output_path = project_audio_dir()?.join(format!("{}_{}.wav", stem, ts));
+
+    let output = Command::new("ffmpeg")
+        .arg("-y")
+        .arg("-i")
+        .arg(&video_path)
+        .arg("-vn")
+        .arg("-ac")
+        .arg("1")
+        .arg("-ar")
+        .arg("16000")
+        .arg("-f")
+        .arg("wav")
+        .arg(&output_path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|e| format!("无法启动 ffmpeg，请确认已安装: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("音频抽取失败:\n{}", stderr));
+    }
+
+    Ok(output_path.to_string_lossy().to_string())
 }
 
 pub fn prepare_logs_for_zip(zip_path: String) -> String {
