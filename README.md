@@ -1,204 +1,315 @@
 # Logcat Agent
 
-> AI-Powered Android Video → Logcat Locator
+> AI-Powered Android Debug Agent
 
-Automatically locate Android logs from screen recordings.
-
-Flutter • Rust • Python • OCR
+Turn Android screen recordings into logs, source code insights, and AI-powered root cause analysis.
 
 ---
 
-## 🚀 Demo Flow
+## What Problem Does It Solve?
+
+Android debugging usually looks like this:
 
 ```text
-🎥 Video Recording
-        ↓
-🤖 OCR Timestamp
-        ↓
-⚡ Rust Extraction
-        ↓
-🔍 Log Search
-        ↓
-📝 Sublime Jump
+Screen Recording
+        +
+Android Export Log
+        +
+Source Code
+
+↓
+Watch Video
+↓
+Remember Timestamp
+↓
+Extract Logs
+↓
+Search Logcat
+↓
+Search Source Code
+↓
+Analyze Root Cause
+```
+
+A single bug can take 30 minutes to several hours to investigate.
+
+Logcat Agent automates this workflow.
+
+---
+
+## Vision
+
+```text
+Video
+ ↓
+Timestamp OCR
+ ↓
+Voice Understanding
+ ↓
+Logcat Location
+ ↓
+Source Mapping
+ ↓
+Flow Analysis
+ ↓
+ChatGPT
+ ↓
+Root Cause Report
 ```
 
 ---
 
-## ✨ Features
+## Features
 
-- 🎥 Video timestamp recognition
-- ⚡ High-speed ZIP / tar.lz4 extraction
-- 🔍 Automatic Logcat location
-- 📝 Sublime Text integration
-- 🖥 Flutter Desktop UI
-- 🤖 OCR powered by CRNN
-- 📦 Android Export Log support
+### Video OCR Agent
+
+Extract timestamps directly from screen recordings.
+
+Supported formats:
+
+```text
+05-07 16:46:59
+05-07 16:46:59.170
+2026-05-07 16:46:59
+```
+
+### Bug Voice Agent
+
+Extract bug descriptions from tester recordings.
+
+Example:
+
+```text
+Tester:
+点击自动泊车以后，界面卡住了，车辆没有进入泊车流程。
+```
+
+Automatically converted to:
+
+```json
+{
+  "bug_description": "点击自动泊车以后界面卡住，车辆没有进入泊车流程"
+}
+```
+
+### Logcat Agent
+
+Automatically:
+
+```text
+Locate Timestamp
+ ↓
+Search Related Logs
+ ↓
+Group By Tag
+ ↓
+Highlight Critical Events
+```
+
+### Source Agent
+
+Automatically map:
+
+```text
+Tag
+ ↓
+Class
+ ↓
+Source File
+ ↓
+Function
+```
+
+Example:
+
+```text
+AutoApa_EngineSomeIpNativeManager
+
+↓
+
+EngineSomeIpNativeManager.cpp
+Line 456
+```
+
+### Flow Agent
+
+Generate Mermaid flowcharts from logs.
+
+```mermaid
+flowchart TD
+
+A[AutoApa Init]
+B[Request Render Data]
+C[Commit Render]
+D{Timeout?}
+E[Error]
+F[Success]
+
+A --> B
+B --> C
+C --> D
+D -->|Yes| E
+D -->|No| F
+```
+
+### ChatGPT Root Cause Agent
+
+Combine:
+
+```text
+Bug Description
++
+Timestamp
++
+Related Logs
++
+Source Code
++
+Flowchart
+```
+
+Generate:
+
+```text
+Problem Summary
+Key Timeline
+Related Logs
+Related Source Files
+Possible Root Cause
+Suggested Fix
+```
 
 ---
 
-## 🎯 Why Logcat Agent
-
-Traditional workflow:
+## Architecture
 
 ```text
-Recording
- ↓
-Watch video
- ↓
-Remember time
- ↓
-Extract logs
- ↓
-Search timestamp
- ↓
-Search tag
- ↓
-Locate issue
-```
-
-Logcat Agent:
-
-```text
-Recording
- ↓
-Click
- ↓
-Done
-```
-
----
-
-## 🏗 Architecture
-
-```text
-Flutter
-   │
-   ├── Video Player
-   ├── Timeline
-   └── Drag & Drop
-   │
-   ▼
+Flutter Desktop
+│
+├── Video Player
+├── Subtitle Overlay
+├── Logcat Viewer
+├── Source Viewer
+└── AI Debug Tree
+│
+▼
 Rust
-   ├── ZIP Extract
-   ├── tar.lz4 Extract
-   └── Log Directory Builder
-   │
-   ▼
+│
+├── ZIP Extraction
+├── tar.lz4 Extraction
+└── Audio Extraction
+│
+▼
 Python
-   ├── OCR
-   ├── Timestamp Parsing
-   ├── Log Search
-   └── Sublime Launcher
-   │
-   ▼
-Sublime Text
+│
+├── OCR Agent
+├── Voice Agent
+├── Log Agent
+├── Source Agent
+├── Flow Agent
+└── ChatGPT Agent
+│
+▼
+AI Root Cause Report
 ```
 
 ---
 
-## 🛠 Tech Stack
+## Workflow
+
+```text
+Import Video
+ ↓
+Import Android Export Log
+ ↓
+OCR Timestamp
+ ↓
+Voice Transcription
+ ↓
+Locate Logcat
+ ↓
+Generate Flowchart
+ ↓
+Map Source Code
+ ↓
+ChatGPT Analysis
+ ↓
+Root Cause Report
+```
+
+---
+
+## Tech Stack
 
 ### Frontend
+
 - Flutter
 - media_kit
-- desktop_drop
 - flutter_rust_bridge
 
 ### Backend
+
 - Rust
 - Python
 
 ### AI
+
 - PyTorch
-- CRNN OCR
+- Faster-Whisper
+- ChatGPT
+
+### Search
+
+- ripgrep
+- Universal Ctags
 
 ---
 
-## 📋 Workflow
-
-```text
-Drag Video
- ↓
-Drag Android Export Log
- ↓
-Locate Problem Frame
- ↓
-OCR Timestamp
- ↓
-Rust Extract Logs
- ↓
-Python Search Logs
- ↓
-Open Sublime At Exact Line
-```
-
----
-
-## 🎯 Use Cases
-
-- Android App Development
-- Android Framework
-- AOSP Development
-- ROM Development
-- Kernel Development
-- QA Testing
-- System Debugging
-
----
-
-## 📸 Screenshots
-
-### Main Window
-
-Add screenshots and demo GIF here.
-
----
-
-## ⚡ Performance
-
-Environment:
-
-```text
-Ubuntu
-Intel i7
-32GB RAM
-NVMe SSD
-```
-
-Typical Results:
-
-```text
-OCR               < 1s
-ZIP Extraction    Seconds
-Log Location      Seconds
-```
-
----
-
-## 🗺 Roadmap
+## Roadmap
 
 ### Current
-- [x] OCR Timestamp Recognition
-- [x] Android Export Log Extraction
-- [x] Log Location
-- [x] Sublime Integration
+
+- [x] Video OCR
+- [x] Android Log Extraction
+- [x] Timestamp Location
 
 ### Next
-- [ ] ChatGPT Log Analysis
-- [ ] AI Root Cause Analysis
-- [ ] Multi Log Package Search
-- [ ] Markdown Report Generation
+
+- [ ] Bug Voice Agent
+- [ ] Flutter Logcat Viewer
+- [ ] Source Agent
+- [ ] Flow Agent
 
 ### Future
-- [ ] Android Log Agent
-- [ ] Autonomous Debug Assistant
-- [ ] AI-generated Debug Reports
+
+- [ ] ChatGPT Root Cause Agent
+- [ ] Android Debug Report Generator
+- [ ] Autonomous Android Debug Agent
 
 ---
 
-## ⭐ Star
+## Why Logcat Agent?
+
+Most tools only analyze logs.
+
+Logcat Agent understands:
+
+```text
+Video
++
+Voice
++
+Logs
++
+Source Code
+```
+
+and turns them into actionable debugging insights.
+
+---
+
+## Star
 
 If this project helps you, please give it a Star.
 
-Repository:
 https://github.com/qli917/logcat_agent
