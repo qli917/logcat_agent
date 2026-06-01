@@ -27,6 +27,11 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(BASE_DIR)
 
 MODEL_PATH = os.path.join(BASE_DIR, "timestamp_crnn_best.pt")
+DEFAULT_WHISPER_TURBO_MODEL_PATH = os.path.join(
+    BASE_DIR,
+    "models",
+    "faster-whisper-large-v3-turbo",
+)
 DEFAULT_WHISPER_MODEL_PATH = os.path.join(BASE_DIR, "models", "faster-whisper-small")
 DEBUG_ROOT = os.path.join(BASE_DIR, "debug_ocr")
 DEFAULT_EXTRACT_DIR = os.path.join(PROJECT_ROOT, "log_hunter_extracted")
@@ -132,12 +137,14 @@ def get_whisper_model():
 
     model_size = os.environ.get("LOGCAT_AGENT_WHISPER_MODEL")
     if not model_size:
-        if not os.path.exists(DEFAULT_WHISPER_MODEL_PATH):
+        if os.path.exists(DEFAULT_WHISPER_TURBO_MODEL_PATH):
+            model_size = DEFAULT_WHISPER_TURBO_MODEL_PATH
+        elif os.path.exists(DEFAULT_WHISPER_MODEL_PATH):
+            model_size = DEFAULT_WHISPER_MODEL_PATH
+        else:
             raise FileNotFoundError(
-                f"本地 Whisper 模型不存在: {DEFAULT_WHISPER_MODEL_PATH}"
+                f"本地 Whisper 模型不存在: {DEFAULT_WHISPER_TURBO_MODEL_PATH} 或 {DEFAULT_WHISPER_MODEL_PATH}"
             )
-
-        model_size = DEFAULT_WHISPER_MODEL_PATH
     device = "cuda" if torch.cuda.is_available() else "cpu"
     compute_type = "float16" if device == "cuda" else "int8"
 
@@ -174,10 +181,12 @@ def normalize_bug_description(segments):
     return text
 
 
-def keep_chinese_display_text(text):
-    text = re.sub(r"[^\u4e00-\u9fff，。！？、：；（）《》“”‘’…]", "", text or "")
-    text = re.sub(r"[，。！？、：；]{2,}", lambda m: m.group(0)[0], text)
-    return text.strip("，。！？、：； ")
+def keep_subtitle_display_text(text):
+    text = text or ""
+    text = re.sub(r"\s+", " ", text).strip()
+    text = re.sub(r"[^\u4e00-\u9fffA-Za-z0-9，。！？、：；（）《》“”‘’…,.!?;:()\\[\\]_/\\- +#]", "", text)
+    text = re.sub(r"[，。！？、：；,.!?;:]{2,}", lambda m: m.group(0)[0], text)
+    return text.strip("，。！？、：；,.!?;: ")
 
 
 def subtitles_output_path(audio_path):
@@ -195,13 +204,17 @@ def transcribe_audio(audio_path):
         audio_path,
         language="zh",
         vad_filter=True,
-        beam_size=1,
+        beam_size=int(os.environ.get("LOGCAT_AGENT_WHISPER_BEAM_SIZE", "5")),
+        best_of=int(os.environ.get("LOGCAT_AGENT_WHISPER_BEST_OF", "5")),
+        patience=1.2,
+        condition_on_previous_text=True,
+        initial_prompt="以下是中文车机操作录屏的语音字幕，内容可能包含泊车辅助、摄像机视图、APA、AVM、摄像机、重新电机切换等词。",
     )
 
     subtitles = []
 
     for segment in segments_iter:
-        text = keep_chinese_display_text(segment.text)
+        text = keep_subtitle_display_text(segment.text)
 
         if not text:
             continue

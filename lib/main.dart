@@ -448,6 +448,9 @@ class _DropAreaState extends State<DropArea> {
       _isVoiceProcessing = false;
       _transcribingVideoPath = null;
       videoPath = null;
+      zipPath = null;
+      zipDirs = [];
+      selectedZipDir = null;
       _currentPosition = Duration.zero;
       _duration = Duration.zero;
       _isPlaying = false;
@@ -457,8 +460,6 @@ class _DropAreaState extends State<DropArea> {
       voiceStatus = "";
       _lastLogFlow = null;
       logs.clear();
-      tagController.clear();
-      rangeController.text = "500";
     });
 
     try {
@@ -1107,39 +1108,24 @@ class _DropAreaState extends State<DropArea> {
                   children: [
                     Container(
                       height: 54,
-                      padding: const EdgeInsets.symmetric(horizontal: 18),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 18,
+                        vertical: 8,
+                      ),
                       decoration: const BoxDecoration(
                         border: Border(
                           bottom: BorderSide(color: Color(0xff1d3554)),
                         ),
                       ),
-                      child: Row(
-                        children: [
-                          const Icon(
-                            Icons.account_tree_outlined,
-                            color: Color(0xff38bdf8),
-                            size: 20,
-                          ),
-                          const SizedBox(width: 10),
-                          const Text(
-                            "Tag日志汇总",
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 16,
-                            ),
-                          ),
-                          const Spacer(),
-                          IconButton(
-                            onPressed: () => Navigator.of(context).pop(),
-                            icon: const Icon(
-                              Icons.close,
-                              color: Colors.white54,
-                            ),
-                          ),
-                        ],
-                      ),
+                      child: _logFlowTitle(flow, () {
+                        Navigator.of(context).pop();
+                      }),
                     ),
+                    if (_isFlowLoading)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(18, 18, 18, 0),
+                        child: _loadingSummary(),
+                      ),
                     Expanded(
                       child: SingleChildScrollView(
                         padding: const EdgeInsets.all(18),
@@ -1247,19 +1233,8 @@ class _DropAreaState extends State<DropArea> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _tagLogSummary(
-          tag: tag,
-          timestamp: (flow["timestamp"] ?? "").toString(),
-          file: (hit["file"] ?? "").toString(),
-          hitLine: hit["line"],
-          mode: (hit["mode"] ?? "").toString(),
-          count: visibleItemsCount,
-          success: success,
-          error: (result["error"] ?? "").toString(),
-        ),
-        const SizedBox(height: 12),
         if (_isFlowLoading)
-          _loadingSummary()
+          const SizedBox.shrink()
         else if (!success)
           _emptyTagLogPanel("未找到匹配日志")
         else if (tagLines.isEmpty)
@@ -1274,6 +1249,81 @@ class _DropAreaState extends State<DropArea> {
             onLoadMore: onLoadMore,
             totalCount: tagLines.length,
           ),
+      ],
+    );
+  }
+
+  Widget _logFlowTitle(Map<String, dynamic> flow, VoidCallback onClose) {
+    final sublime = flow["sublime"];
+    final result = sublime is Map<String, dynamic>
+        ? sublime
+        : <String, dynamic>{};
+    final hit = result["hit"] is Map<String, dynamic>
+        ? result["hit"] as Map<String, dynamic>
+        : <String, dynamic>{};
+    final tagLines = result["current_file_tag_lines"] is List
+        ? result["current_file_tag_lines"] as List
+        : const [];
+    final success = result["success"] == true;
+    final tag = (flow["tag"] ?? "").toString();
+    final timestamp = (flow["timestamp"] ?? "").toString();
+    final mode = (hit["mode"] ?? "").toString();
+    final hitLine = hit["line"]?.toString() ?? "";
+    final error = (result["error"] ?? "").toString();
+
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Icon(
+          success ? Icons.manage_search : Icons.error_outline,
+          color: success ? const Color(0xff38bdf8) : const Color(0xfffb7185),
+          size: 20,
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Row(
+            children: [
+              Text(
+                success ? "当前文件 Tag 汇总" : "检索失败",
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 15,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Text(
+                success ? "${tagLines.length}条" : error,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: success ? Colors.white54 : const Color(0xfffb7185),
+                  fontSize: 12,
+                ),
+              ),
+              const SizedBox(width: 14),
+              Flexible(
+                child: SelectableText(
+                  [
+                    "Tag: ${tag.isEmpty ? "无" : tag}",
+                    "时间戳: $timestamp",
+                    "模式: $mode",
+                    "命中行: $hitLine",
+                  ].join("    "),
+                  maxLines: 1,
+                  style: const TextStyle(
+                    color: Colors.white70,
+                    fontSize: 12,
+                    fontFamily: "monospace",
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        IconButton(
+          onPressed: onClose,
+          icon: const Icon(Icons.close, color: Colors.white54),
+        ),
       ],
     );
   }
@@ -1297,78 +1347,6 @@ class _DropAreaState extends State<DropArea> {
           Text(
             "正在加载当前文件 Tag 汇总...",
             style: TextStyle(color: Colors.white70, fontSize: 13),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _tagLogSummary({
-    required String tag,
-    required String timestamp,
-    required String file,
-    required dynamic hitLine,
-    required String mode,
-    required int count,
-    required bool success,
-    required String error,
-  }) {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: const Color(0xff102033),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(
-          color: (success ? const Color(0xff38bdf8) : const Color(0xfffb7185))
-              .withValues(alpha: 0.65),
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(
-                success ? Icons.manage_search : Icons.error_outline,
-                color: success
-                    ? const Color(0xff38bdf8)
-                    : const Color(0xfffb7185),
-                size: 18,
-              ),
-              const SizedBox(width: 8),
-              Text(
-                success ? "当前文件 Tag 汇总" : "检索失败",
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 14,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              const Spacer(),
-              Text(
-                success ? "$count条" : error,
-                style: TextStyle(
-                  color: success ? Colors.white54 : const Color(0xfffb7185),
-                  fontSize: 12,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          SelectableText(
-            [
-              "Tag: ${tag.isEmpty ? "无" : tag}",
-              "时间戳: $timestamp",
-              "模式: $mode",
-              "命中行: $hitLine",
-              "文件: $file",
-            ].join("\n"),
-            style: const TextStyle(
-              color: Colors.white70,
-              fontSize: 12,
-              height: 1.45,
-              fontFamily: "monospace",
-            ),
           ),
         ],
       ),
