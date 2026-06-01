@@ -69,6 +69,7 @@ __pycache__/
 .env
 .venv/
 venv/
+log_hunter_subtitles/
 
 # Rust
 target/
@@ -81,7 +82,8 @@ rust_builder/target/
 *.onnx
 *.engine
 *.jpg
-
+*.wav
+*.bin
 # OS
 .DS_Store
 Thumbs.db

@@ -7,6 +7,7 @@ import logging
 import numpy as np
 import subprocess
 import json
+import shutil
 from flask import Flask, request, jsonify
 from datetime import datetime
 from collections import Counter
@@ -25,6 +26,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(BASE_DIR)
 
 MODEL_PATH = os.path.join(BASE_DIR, "timestamp_crnn_best.pt")
+DEFAULT_WHISPER_MODEL_PATH = os.path.join(BASE_DIR, "models", "faster-whisper-small")
 DEBUG_ROOT = os.path.join(BASE_DIR, "debug_ocr")
 DEFAULT_EXTRACT_DIR = os.path.join(PROJECT_ROOT, "log_hunter_extracted")
 SUBTITLE_ROOT = os.path.join(PROJECT_ROOT, "log_hunter_subtitles")
@@ -126,7 +128,10 @@ def get_whisper_model():
             "缺少 faster_whisper，请先安装 Python 依赖: pip install faster-whisper"
         ) from e
 
-    model_size = os.environ.get("LOGCAT_AGENT_WHISPER_MODEL", "small")
+    model_size = os.environ.get(
+        "LOGCAT_AGENT_WHISPER_MODEL",
+        DEFAULT_WHISPER_MODEL_PATH if os.path.exists(DEFAULT_WHISPER_MODEL_PATH) else "small",
+    )
     device = "cuda" if torch.cuda.is_available() else "cpu"
     compute_type = "float16" if device == "cuda" else "int8"
 
@@ -163,6 +168,12 @@ def normalize_bug_description(segments):
     return text
 
 
+def keep_chinese_display_text(text):
+    text = re.sub(r"[^\u4e00-\u9fff，。！？、：；（）《》“”‘’…]", "", text or "")
+    text = re.sub(r"[，。！？、：；]{2,}", lambda m: m.group(0)[0], text)
+    return text.strip("，。！？、：； ")
+
+
 def subtitles_output_path(audio_path):
     base = os.path.splitext(os.path.basename(audio_path))[0]
     return os.path.join(SUBTITLE_ROOT, f"{base}_subtitles.json")
@@ -178,13 +189,13 @@ def transcribe_audio(audio_path):
         audio_path,
         language="zh",
         vad_filter=True,
-        beam_size=5,
+        beam_size=1,
     )
 
     subtitles = []
 
     for segment in segments_iter:
-        text = (segment.text or "").strip()
+        text = keep_chinese_display_text(segment.text)
 
         if not text:
             continue
@@ -805,9 +816,47 @@ def search_closest_time(files, target_dt):
     return best_hit
 
 
+def collect_current_file_tag_lines(path, tag, center_line=None, limit=120):
+    if not path or not os.path.isfile(path):
+        return []
+
+    if not tag or not tag.strip():
+        return []
+
+    items = []
+
+    try:
+        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            for line_no, line in enumerate(f, start=1):
+                if not line_contains_tag(line, tag):
+                    continue
+
+                dt = extract_line_datetime(line)
+
+                items.append({
+                    "line": line_no,
+                    "time": dt.strftime("%m-%d %H:%M:%S") if dt else "",
+                    "text": line.rstrip(),
+                    "distance": abs(line_no - center_line) if center_line else line_no,
+                })
+    except Exception:
+        return []
+
+    items.sort(key=lambda item: item["distance"])
+    selected = items[:limit]
+    selected.sort(key=lambda item: item["line"])
+
+    return selected
+
+
 def open_sublime_hit(hit):
+    subl = shutil.which("subl") or "/usr/bin/subl"
+
+    if not os.path.exists(subl):
+        raise FileNotFoundError("找不到 subl 命令，请确认 Sublime Text 命令行工具已安装")
+
     subprocess.Popen([
-        "subl",
+        subl,
         f"{hit['file']}:{hit['line']}",
     ])
 
@@ -882,6 +931,12 @@ def call_sublime_plugin(timestamp, tag="", log_dir=""):
                 "files": files,
             }
 
+        tag_lines = collect_current_file_tag_lines(
+            hit.get("file"),
+            tag,
+            center_line=hit.get("line"),
+        )
+
         open_sublime_hit(hit)
 
         return {
@@ -892,6 +947,8 @@ def call_sublime_plugin(timestamp, tag="", log_dir=""):
             "log_dir": real_log_dir,
             "hit": hit,
             "files": files,
+            "current_file_tag_lines": tag_lines,
+            "current_file_tag_total": len(tag_lines),
         }
 
     except Exception as e:
@@ -925,6 +982,15 @@ def extract_timestamp():
         )
 
         if timestamp:
+            if request.args.get("search", "1") == "0":
+                return jsonify({
+                    "timestamp": timestamp,
+                    "mode": info.get("mode"),
+                    "debug_dir": info.get("debug_dir"),
+                    "parsed_items": info.get("parsed_items"),
+                    "results": info.get("results"),
+                }), 200
+
             sublime_result = call_sublime_plugin(
                 timestamp=timestamp,
                 tag=tag,
@@ -949,6 +1015,76 @@ def extract_timestamp():
 
     except Exception as e:
         logger.exception("OCR接口异常")
+
+        return jsonify({
+            "error": str(e),
+            "type": type(e).__name__,
+        }), 500
+
+
+@app.route("/open_log_hit", methods=["POST"])
+def open_log_hit():
+    try:
+        payload = request.get_json(silent=True) or {}
+        file_path = (payload.get("file") or "").strip()
+        line = int(payload.get("line") or 1)
+
+        if not file_path:
+            return jsonify({"error": "missing file"}), 400
+
+        if not os.path.exists(file_path):
+            return jsonify({
+                "error": "file not exists",
+                "file": file_path,
+            }), 400
+
+        open_sublime_hit({
+            "file": file_path,
+            "line": max(line, 1),
+        })
+
+        return jsonify({
+            "success": True,
+            "file": file_path,
+            "line": max(line, 1),
+        }), 200
+
+    except Exception as e:
+        logger.exception("打开 Sublime 接口异常")
+
+        return jsonify({
+            "error": str(e),
+            "type": type(e).__name__,
+        }), 500
+
+
+@app.route("/open_by_timestamp", methods=["POST"])
+def open_by_timestamp():
+    try:
+        payload = request.get_json(silent=True) or {}
+        timestamp = (payload.get("timestamp") or "").strip()
+        tag = (payload.get("tag") or "").strip()
+        log_dir = (payload.get("log_dir") or "").strip()
+
+        if not timestamp:
+            return jsonify({"error": "missing timestamp"}), 400
+
+        result = call_sublime_plugin(
+            timestamp=timestamp,
+            tag=tag,
+            log_dir=log_dir,
+        )
+
+        if isinstance(result, dict):
+            result.pop("current_file_tag_lines", None)
+            result.pop("current_file_tag_total", None)
+
+        status = 200 if result.get("success") else 404
+
+        return jsonify(result), status
+
+    except Exception as e:
+        logger.exception("按时间戳打开 Sublime 接口异常")
 
         return jsonify({
             "error": str(e),

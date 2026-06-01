@@ -7,8 +7,10 @@ class AppTitleBar extends StatelessWidget {
   final TextEditingController tagController;
   final TextEditingController rangeController;
   final bool isProcessing;
+  final bool hasLogFlow;
   final ValueChanged<String?> onZipDirChanged;
   final VoidCallback? onStart;
+  final VoidCallback? onShowLogFlow;
   final VoidCallback onReset;
 
   const AppTitleBar({
@@ -18,8 +20,10 @@ class AppTitleBar extends StatelessWidget {
     required this.tagController,
     required this.rangeController,
     required this.isProcessing,
+    required this.hasLogFlow,
     required this.onZipDirChanged,
     required this.onStart,
+    required this.onShowLogFlow,
     required this.onReset,
   });
 
@@ -50,15 +54,11 @@ class AppTitleBar extends StatelessWidget {
                   fillColor: const Color(0xff242424),
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(6),
-                    borderSide: const BorderSide(
-                      color: Color(0xff333333),
-                    ),
+                    borderSide: const BorderSide(color: Color(0xff333333)),
                   ),
                   enabledBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(6),
-                    borderSide: const BorderSide(
-                      color: Color(0xff333333),
-                    ),
+                    borderSide: const BorderSide(color: Color(0xff333333)),
                   ),
                   contentPadding: const EdgeInsets.symmetric(
                     horizontal: 10,
@@ -91,10 +91,7 @@ class AppTitleBar extends StatelessWidget {
               height: 32,
               child: TextField(
                 controller: tagController,
-                style: const TextStyle(
-                  color: Colors.white70,
-                  fontSize: 12,
-                ),
+                style: const TextStyle(color: Colors.white70, fontSize: 12),
                 decoration: InputDecoration(
                   hintText: "Tag关键词",
                   hintStyle: const TextStyle(
@@ -105,15 +102,11 @@ class AppTitleBar extends StatelessWidget {
                   fillColor: const Color(0xff242424),
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(6),
-                    borderSide: const BorderSide(
-                      color: Color(0xff333333),
-                    ),
+                    borderSide: const BorderSide(color: Color(0xff333333)),
                   ),
                   enabledBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(6),
-                    borderSide: const BorderSide(
-                      color: Color(0xff333333),
-                    ),
+                    borderSide: const BorderSide(color: Color(0xff333333)),
                   ),
                   contentPadding: const EdgeInsets.symmetric(
                     horizontal: 10,
@@ -131,10 +124,7 @@ class AppTitleBar extends StatelessWidget {
               child: TextField(
                 controller: rangeController,
                 keyboardType: TextInputType.number,
-                style: const TextStyle(
-                  color: Colors.white70,
-                  fontSize: 12,
-                ),
+                style: const TextStyle(color: Colors.white70, fontSize: 12),
                 decoration: InputDecoration(
                   hintText: "±ms",
                   hintStyle: const TextStyle(
@@ -145,15 +135,11 @@ class AppTitleBar extends StatelessWidget {
                   fillColor: const Color(0xff242424),
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(6),
-                    borderSide: const BorderSide(
-                      color: Color(0xff333333),
-                    ),
+                    borderSide: const BorderSide(color: Color(0xff333333)),
                   ),
                   enabledBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(6),
-                    borderSide: const BorderSide(
-                      color: Color(0xff333333),
-                    ),
+                    borderSide: const BorderSide(color: Color(0xff333333)),
                   ),
                   contentPadding: const EdgeInsets.symmetric(
                     horizontal: 10,
@@ -168,23 +154,13 @@ class AppTitleBar extends StatelessWidget {
             SizedBox(
               height: 32,
               child: OutlinedButton.icon(
-                onPressed: onReset,
-                icon: const Icon(
-                  Icons.refresh,
-                  size: 15,
-                ),
-                label: const Text(
-                  "重置",
-                  style: TextStyle(fontSize: 12),
-                ),
+                onPressed: onShowLogFlow,
+                icon: const Icon(Icons.account_tree_outlined, size: 15),
+                label: const Text("日志流程图", style: TextStyle(fontSize: 12)),
                 style: OutlinedButton.styleFrom(
-                  foregroundColor: Colors.white60,
-                  side: const BorderSide(
-                    color: Color(0xff333333),
-                  ),
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                  ),
+                  foregroundColor: hasLogFlow ? Colors.white60 : Colors.white38,
+                  side: const BorderSide(color: Color(0xff333333)),
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(6),
                   ),
@@ -192,11 +168,26 @@ class AppTitleBar extends StatelessWidget {
               ),
             ),
 
-            Expanded(
-              child: MoveWindow(
-                child: const SizedBox.expand(),
+            const SizedBox(width: 10),
+
+            SizedBox(
+              height: 32,
+              child: OutlinedButton.icon(
+                onPressed: onReset,
+                icon: const Icon(Icons.refresh, size: 15),
+                label: const Text("重置", style: TextStyle(fontSize: 12)),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Colors.white60,
+                  side: const BorderSide(color: Color(0xff333333)),
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                ),
               ),
             ),
+
+            Expanded(child: MoveWindow(child: const SizedBox.expand())),
 
             MinimizeWindowButton(
               colors: WindowButtonColors(

@@ -11,6 +11,7 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'src/rust/api/simple.dart';
 import 'src/rust/frb_generated.dart';
@@ -92,6 +93,8 @@ class DropArea extends StatefulWidget {
 }
 
 class _DropAreaState extends State<DropArea> {
+  static const _tagKeywordCacheKey = "tag_keyword";
+
   late final Player player = Player();
 
   late final VideoController controller = VideoController(
@@ -114,10 +117,15 @@ class _DropAreaState extends State<DropArea> {
   List<SubtitleSegment> subtitles = [];
   String bugDescription = "";
   String? subtitlesPath;
+  String voiceStatus = "";
+  Map<String, dynamic>? _lastLogFlow;
+  bool _isFlowLoading = false;
 
   bool _isProcessing = false;
   bool _isVoiceProcessing = false;
   bool _disposed = false;
+  int _voiceJobId = 0;
+  String? _transcribingVideoPath;
 
   double _actionOpacity = 0.2;
   Timer? _actionOpacityTimer;
@@ -133,6 +141,9 @@ class _DropAreaState extends State<DropArea> {
   @override
   void initState() {
     super.initState();
+
+    _loadCachedTagKeyword();
+    tagController.addListener(_saveTagKeyword);
 
     _positionSub = player.stream.position.listen((position) {
       trySetState(() {
@@ -168,6 +179,7 @@ class _DropAreaState extends State<DropArea> {
     _durationSub?.cancel();
     _playingSub?.cancel();
 
+    tagController.removeListener(_saveTagKeyword);
     tagController.dispose();
     rangeController.dispose();
 
@@ -187,6 +199,59 @@ class _DropAreaState extends State<DropArea> {
       if (!mounted || _disposed) return;
       setState(fn);
     } catch (_) {}
+  }
+
+  Future<void> _loadCachedTagKeyword() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final cachedTag = prefs.getString(_tagKeywordCacheKey);
+
+      if (cachedTag == null || !mounted || _disposed) return;
+
+      tagController.text = cachedTag;
+    } catch (_) {}
+  }
+
+  Future<void> _saveTagKeyword() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_tagKeywordCacheKey, tagController.text);
+    } catch (_) {}
+  }
+
+  Map<String, dynamic> _decodePythonJson(
+    http.Response response,
+    String apiName,
+  ) {
+    try {
+      final decoded = jsonDecode(response.body);
+
+      if (decoded is Map<String, dynamic>) {
+        return decoded;
+      }
+
+      throw const FormatException("response is not a JSON object");
+    } catch (_) {
+      final preview = response.body.trim().replaceAll(RegExp(r"\s+"), " ");
+      final message = response.statusCode == 404
+          ? "Python 服务不支持 $apiName 接口，可能 5000 端口上运行的是旧版服务。请重启应用，或先停止占用 5000 端口的 python/flask 进程。"
+          : "Python 返回的不是 JSON";
+
+      throw Exception(
+        "$message\nHTTP ${response.statusCode}\n${preview.length > 240 ? preview.substring(0, 240) : preview}",
+      );
+    }
+  }
+
+  Future<void> _ensureTranscribeApiReady() async {
+    final response = await http
+        .get(Uri.parse("http://127.0.0.1:5000/debug_path"))
+        .timeout(const Duration(seconds: 5));
+    final data = _decodePythonJson(response, "/debug_path");
+
+    if (response.statusCode != 200 || !data.containsKey("subtitle_root")) {
+      throw Exception("当前 Python 服务不支持语音字幕接口，请重启应用，或停止旧的 5000 端口服务后再试。");
+    }
   }
 
   String fileName(String? path) {
@@ -234,7 +299,7 @@ class _DropAreaState extends State<DropArea> {
                 ? null
                 : () {
                     if (_disposed || !mounted) return;
-                    _startProcess();
+                    unawaited(_startProcess());
                   },
             child: Container(
               width: 72,
@@ -321,48 +386,80 @@ class _DropAreaState extends State<DropArea> {
       if (_disposed || !mounted) return;
 
       if (result != null && result.files.single.path != null) {
-        final path = result.files.single.path!;
-
-        trySetState(() {
-          videoPath = path;
-          _currentPosition = Duration.zero;
-          _duration = Duration.zero;
-          subtitles.clear();
-          bugDescription = "";
-          subtitlesPath = null;
-        });
-
-        await player.open(Media(path), play: false);
+        await _loadVideo(result.files.single.path!);
       }
     } catch (_) {}
   }
 
+  Future<void> _loadVideo(String path) async {
+    final voiceJobId = ++_voiceJobId;
+
+    trySetState(() {
+      videoPath = path;
+      _currentPosition = Duration.zero;
+      _duration = Duration.zero;
+      subtitles.clear();
+      bugDescription = "";
+      subtitlesPath = null;
+      voiceStatus = "等待自动识别语音字幕...";
+      _isVoiceProcessing = false;
+      _transcribingVideoPath = null;
+      _lastLogFlow = null;
+    });
+
+    await player.open(Media(path), play: false);
+
+    if (_disposed || !mounted || videoPath != path) return;
+
+    unawaited(_extractBugVoice(sourceVideoPath: path, voiceJobId: voiceJobId));
+  }
+
   void _resetConditions() {
     trySetState(() {
+      _voiceJobId++;
+      _isVoiceProcessing = false;
+      _transcribingVideoPath = null;
       selectedZipDir = zipDirs.isNotEmpty ? zipDirs.first : null;
       tagController.clear();
       rangeController.text = "500";
       subtitles.clear();
       bugDescription = "";
       subtitlesPath = null;
+      voiceStatus = "";
+      _lastLogFlow = null;
       logs.clear();
     });
   }
 
   String _currentSubtitleText() {
-    for (final subtitle in subtitles) {
-      if (subtitle.contains(_currentPosition)) {
-        return subtitle.text;
+    final index = _subtitleIndexAt(_currentPosition);
+    return index == -1 ? "" : subtitles[index].text;
+  }
+
+  int _subtitleIndexAt(Duration position) {
+    for (var i = 0; i < subtitles.length; i++) {
+      if (subtitles[i].contains(position)) {
+        return i;
       }
     }
 
-    return "";
+    return -1;
   }
 
-  Future<void> _extractBugVoice() async {
-    if (_disposed || !mounted || _isVoiceProcessing) return;
+  Future<void> _extractBugVoice({
+    String? sourceVideoPath,
+    int? voiceJobId,
+  }) async {
+    final targetVideoPath = sourceVideoPath ?? videoPath;
+    final currentVoiceJobId = voiceJobId ?? ++_voiceJobId;
 
-    if (videoPath == null) {
+    if (_disposed || !mounted) return;
+
+    if (_isVoiceProcessing && _transcribingVideoPath == targetVideoPath) {
+      return;
+    }
+
+    if (targetVideoPath == null) {
       trySetState(() {
         logs.insert(0, "缺少视频\n请先拖入或选择视频文件");
       });
@@ -371,31 +468,37 @@ class _DropAreaState extends State<DropArea> {
 
     trySetState(() {
       _isVoiceProcessing = true;
-      logs.insert(0, "开始语音识别\n视频: ${fileName(videoPath)}");
+      _transcribingVideoPath = targetVideoPath;
+      voiceStatus = "正在检查 Python 语音服务...";
+      logs.insert(0, "开始自动语音识别\n视频: ${fileName(targetVideoPath)}");
     });
 
     try {
-      final audioPath = await extractAudioFromVideo(videoPath: videoPath!);
+      await _ensureTranscribeApiReady();
 
-      if (_disposed || !mounted) return;
+      if (_isStaleVoiceJob(currentVoiceJobId, targetVideoPath)) return;
 
-      final uri = Uri.parse("http://127.0.0.1:5000/transcribe").replace(
-        queryParameters: {
-          'audio_path': audioPath,
-        },
-      );
+      trySetState(() {
+        voiceStatus = "正在从录屏中抽取音频...";
+      });
+
+      final audioPath = await extractAudioFromVideo(videoPath: targetVideoPath);
+
+      if (_isStaleVoiceJob(currentVoiceJobId, targetVideoPath)) return;
+
+      trySetState(() {
+        voiceStatus = "正在识别语音字幕，首次加载 Whisper 可能较慢...";
+      });
+
+      final uri = Uri.parse(
+        "http://127.0.0.1:5000/transcribe",
+      ).replace(queryParameters: {'audio_path': audioPath});
 
       final response = await http.get(uri).timeout(const Duration(minutes: 5));
 
-      if (_disposed || !mounted) return;
+      if (_isStaleVoiceJob(currentVoiceJobId, targetVideoPath)) return;
 
-      Map<String, dynamic> data;
-
-      try {
-        data = jsonDecode(response.body);
-      } catch (_) {
-        throw Exception("Python 返回的不是 JSON:\n${response.body}");
-      }
+      final data = _decodePythonJson(response, "/transcribe");
 
       if (response.statusCode != 200) {
         final error = data['error'] ?? "未知错误";
@@ -405,16 +508,18 @@ class _DropAreaState extends State<DropArea> {
       final rawSubtitles = data['subtitles'];
       final parsedSubtitles = rawSubtitles is List
           ? rawSubtitles
-              .whereType<Map<String, dynamic>>()
-              .map(SubtitleSegment.fromJson)
-              .toList()
+                .whereType<Map<String, dynamic>>()
+                .map(SubtitleSegment.fromJson)
+                .toList()
           : <SubtitleSegment>[];
 
       trySetState(() {
         subtitles = parsedSubtitles;
         bugDescription = (data['bug_description'] ?? '').toString();
         subtitlesPath = (data['subtitles_path'] ?? '').toString();
+        voiceStatus = "";
         _isVoiceProcessing = false;
+        _transcribingVideoPath = null;
         logs.insert(
           0,
           "语音识别完成\n音频: $audioPath\n字幕: ${subtitlesPath ?? ""}\n"
@@ -423,16 +528,26 @@ class _DropAreaState extends State<DropArea> {
       });
     } catch (e) {
       if (_disposed || !mounted) return;
+      if (_isStaleVoiceJob(currentVoiceJobId, targetVideoPath)) return;
 
       trySetState(() {
         _isVoiceProcessing = false;
+        _transcribingVideoPath = null;
+        voiceStatus = "";
         logs.insert(0, "语音识别异常\n$e");
       });
     }
   }
 
-  Future<void> _startProcess() async {
-    if (_disposed || !mounted || _isProcessing) return;
+  bool _isStaleVoiceJob(int voiceJobId, String targetVideoPath) {
+    return _disposed ||
+        !mounted ||
+        voiceJobId != _voiceJobId ||
+        videoPath != targetVideoPath;
+  }
+
+  Future<bool> _startProcess() async {
+    if (_disposed || !mounted || _isProcessing) return false;
 
     _showActionButton();
 
@@ -448,7 +563,7 @@ class _DropAreaState extends State<DropArea> {
       trySetState(() {
         logs.insert(0, "缺少文件\n请先拖入视频和 ZIP 文件");
       });
-      return;
+      return false;
     }
 
     final timeMs = _currentPosition.inMilliseconds.clamp(0, 1 << 31).toDouble();
@@ -469,47 +584,19 @@ class _DropAreaState extends State<DropArea> {
     log += "范围: ±${rangeController.text}ms\n\n";
 
     try {
-      log += "[1/2] Rust 解压日志中...\n";
-
-      final rustResult = await processFiles(
-        targetTimestamp: "",
-        zipPath: zipPath!,
-        zipInnerDir: selectedZipDir ?? "",
-        tagKeyword: "",
-        rangeMs: 0,
-      );
-
-      if (_disposed || !mounted) return;
-
-      log += rustResult;
-      log += "\n\n";
-
-      final lines = rustResult
-          .split('\n')
-          .map((e) => e.trim())
-          .where((e) => e.isNotEmpty)
-          .toList();
-
-      final logDir = lines.isNotEmpty ? lines.last : "";
-
-      if (logDir.isEmpty || rustResult.contains("❌")) {
-        throw Exception("日志解压失败，无法获取日志目录:\n$rustResult");
-      }
-
-      log += "[2/2] Python OCR + 日志检索中...\n";
+      log += "[1/2] Python OCR 识别视频时间戳中...\n";
 
       final uri = Uri.parse("http://127.0.0.1:5000/ocr").replace(
         queryParameters: {
           'path': videoPath!,
           'time': timeMs.toString(),
-          'tag': tagController.text.trim(),
-          'log_dir': logDir,
+          'search': '0',
         },
       );
 
       final response = await http.get(uri).timeout(const Duration(seconds: 20));
 
-      if (_disposed || !mounted) return;
+      if (_disposed || !mounted) return false;
 
       Map<String, dynamic> data;
 
@@ -525,21 +612,69 @@ class _DropAreaState extends State<DropArea> {
       }
 
       final timestamp = data['timestamp'] ?? "";
-      final sublime = data['sublime'];
+      final tag = tagController.text.trim();
+      final logDir = await getLogDir(zipInnerDir: selectedZipDir ?? "");
 
       log += "OCR识别成功\n";
-      log += "时间戳: $timestamp\n";
-      log += "日志目录: $logDir\n\n";
-      log += "Sublime检索结果:\n$sublime\n";
+      log += "时间戳: $timestamp\n\n";
+      log += "[2/2] Python 打开 Sublime 中...\n";
+
+      final response2 = await http
+          .post(
+            Uri.parse("http://127.0.0.1:5000/open_by_timestamp"),
+            headers: const {"Content-Type": "application/json"},
+            body: jsonEncode({
+              "timestamp": timestamp.toString(),
+              "tag": tag,
+              "log_dir": logDir,
+            }),
+          )
+          .timeout(const Duration(seconds: 10));
+
+      if (_disposed || !mounted) return false;
+
+      Map<String, dynamic> openResult;
+
+      try {
+        openResult = _decodePythonJson(response2, "/open_by_timestamp");
+      } catch (e) {
+        openResult = {
+          "success": false,
+          "error": e.toString().replaceFirst("Exception: ", ""),
+          "raw": response2.body,
+          "status": response2.statusCode,
+        };
+      }
+
+      if (response2.statusCode != 200 && response2.statusCode != 404) {
+        throw Exception("Python 打开 Sublime 失败: ${response2.body}");
+      }
+
+      final hit = openResult["hit"];
+      final flow = {
+        "timestamp": timestamp,
+        "tag": tag,
+        "log_dir": logDir,
+        "sublime": openResult,
+        "hit_file": hit is Map ? (hit["file"] ?? "").toString() : "",
+        "hit_line": hit is Map ? hit["line"] : 1,
+      };
+      final found = openResult["success"] == true;
+
+      log += found ? "Python 已打开 Sublime\n" : "Python 未能定位日志\n";
+      log += "日志目录: $logDir\n";
+      log += "命中: ${hit ?? openResult["error"] ?? ""}\n";
 
       trySetState(() {
         _isProcessing = false;
+        _lastLogFlow = flow;
         logs.insert(0, log);
       });
 
       _showActionButton();
+      return true;
     } catch (e) {
-      if (_disposed || !mounted) return;
+      if (_disposed || !mounted) return false;
 
       log += "\n异常:\n$e";
 
@@ -549,7 +684,27 @@ class _DropAreaState extends State<DropArea> {
       });
 
       _showActionButton();
+      return false;
     }
+  }
+
+  Map<String, dynamic> _decodeRustSearchResult(String payload) {
+    try {
+      final decoded = jsonDecode(payload);
+
+      if (decoded is Map) {
+        return Map<String, dynamic>.from(decoded);
+      }
+    } catch (_) {}
+
+    return {
+      "success": false,
+      "error": "Rust 返回的不是检索 JSON",
+      "raw": payload,
+      "hit": null,
+      "current_file_tag_lines": <Map<String, dynamic>>[],
+      "current_file_tag_total": 0,
+    };
   }
 
   Widget _glassCard({
@@ -637,7 +792,11 @@ class _DropAreaState extends State<DropArea> {
       child: Center(
         child: Text(
           text.isEmpty
-              ? (_isVoiceProcessing ? "语音识别中..." : "暂无字幕")
+              ? (_isVoiceProcessing
+                    ? voiceStatus
+                    : videoPath == null
+                    ? "暂无字幕"
+                    : "等待自动识别字幕")
               : text,
           maxLines: 2,
           overflow: TextOverflow.ellipsis,
@@ -764,26 +923,42 @@ class _DropAreaState extends State<DropArea> {
                         ),
                       ),
                       const Spacer(),
-                      TextButton.icon(
-                        onPressed: _isVoiceProcessing
-                            ? null
-                            : () {
-                                _extractBugVoice();
-                              },
-                        icon: _isVoiceProcessing
-                            ? const SizedBox(
-                                width: 14,
-                                height: 14,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                ),
-                              )
-                            : const Icon(Icons.subtitles_outlined, size: 16),
-                        label: Text(
-                          _isVoiceProcessing ? "识别中" : "语音字幕",
-                          style: const TextStyle(fontSize: 12),
+                      if (_isVoiceProcessing)
+                        const Row(
+                          children: [
+                            SizedBox(
+                              width: 14,
+                              height: 14,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            ),
+                            SizedBox(width: 8),
+                            Text(
+                              "自动识别中",
+                              style: TextStyle(
+                                color: Colors.white54,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ],
+                        )
+                      else if (subtitles.isNotEmpty)
+                        const Row(
+                          children: [
+                            Icon(
+                              Icons.subtitles_outlined,
+                              color: Color(0xff38bdf8),
+                              size: 16,
+                            ),
+                            SizedBox(width: 6),
+                            Text(
+                              "字幕已同步",
+                              style: TextStyle(
+                                color: Colors.white54,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ],
                         ),
-                      ),
                     ],
                   ),
                   const SizedBox(height: 14),
@@ -821,6 +996,458 @@ class _DropAreaState extends State<DropArea> {
     );
   }
 
+  Future<void> _showLogFlowDialog() async {
+    if (_lastLogFlow == null) {
+      return;
+    }
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) {
+        return const AlertDialog(
+          backgroundColor: Color(0xff0b1626),
+          content: SizedBox(
+            width: 260,
+            child: Row(
+              children: [
+                SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+                SizedBox(width: 12),
+                Text(
+                  "正在加载当前文件 Tag 汇总...",
+                  style: TextStyle(color: Colors.white70, fontSize: 13),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+
+    await _loadTagSummaryIfNeeded();
+
+    if (_disposed || !mounted || _lastLogFlow == null) return;
+
+    Navigator.of(context, rootNavigator: true).pop();
+
+    final flow = _lastLogFlow!;
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        return Dialog(
+          backgroundColor: const Color(0xff0b1626),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+            side: const BorderSide(color: Color(0xff1d3554)),
+          ),
+          child: SizedBox(
+            width: 980,
+            height: 620,
+            child: Column(
+              children: [
+                Container(
+                  height: 54,
+                  padding: const EdgeInsets.symmetric(horizontal: 18),
+                  decoration: const BoxDecoration(
+                    border: Border(
+                      bottom: BorderSide(color: Color(0xff1d3554)),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(
+                        Icons.account_tree_outlined,
+                        color: Color(0xff38bdf8),
+                        size: 20,
+                      ),
+                      const SizedBox(width: 10),
+                      const Text(
+                        "Tag日志汇总",
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 16,
+                        ),
+                      ),
+                      const Spacer(),
+                      IconButton(
+                        onPressed: () => Navigator.of(context).pop(),
+                        icon: const Icon(Icons.close, color: Colors.white54),
+                      ),
+                    ],
+                  ),
+                ),
+                Expanded(
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.all(18),
+                    child: _buildLogFlow(flow),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _loadTagSummaryIfNeeded() async {
+    final flow = _lastLogFlow;
+    if (flow == null || _isFlowLoading) return;
+
+    final sublime = flow["sublime"];
+    if (sublime is! Map) return;
+
+    final hit = sublime["hit"];
+    if (hit is! Map) return;
+
+    final cachedLines = sublime["current_file_tag_lines"];
+    if (cachedLines is List && cachedLines.isNotEmpty) return;
+
+    final logDir = (flow["log_dir"] ?? "").toString();
+    final tag = (flow["tag"] ?? "").toString();
+    final file = (hit["file"] ?? "").toString();
+    final line = hit["line"] is num ? (hit["line"] as num).toInt() : 1;
+
+    if (logDir.isEmpty || tag.trim().isEmpty || file.isEmpty) return;
+
+    trySetState(() {
+      _isFlowLoading = true;
+    });
+
+    try {
+      final response = await http
+          .post(
+            Uri.parse("http://127.0.0.1:5000/open_log_hit"),
+            headers: const {"Content-Type": "application/json"},
+            body: jsonEncode({"file": file, "line": line}),
+          )
+          .timeout(const Duration(seconds: 5));
+
+      if (response.statusCode != 200) {
+        throw Exception(response.body);
+      }
+
+      final result = await processFiles(
+        targetTimestamp: (flow["timestamp"] ?? "").toString(),
+        zipPath: zipPath ?? "",
+        zipInnerDir: selectedZipDir ?? "",
+        tagKeyword: tag,
+        rangeMs: int.tryParse(rangeController.text.trim()) ?? 0,
+      );
+
+      final decoded = _decodeRustSearchResult(result);
+      final lines = decoded["current_file_tag_lines"];
+
+      if (_disposed || !mounted || _lastLogFlow == null) return;
+
+      final updatedSublime = Map<String, dynamic>.from(sublime);
+      updatedSublime["current_file_tag_lines"] = lines is List
+          ? lines
+                .whereType<Map>()
+                .map((item) => Map<String, dynamic>.from(item))
+                .toList()
+          : <Map<String, dynamic>>[];
+      updatedSublime["current_file_tag_total"] =
+          (updatedSublime["current_file_tag_lines"] as List).length;
+
+      trySetState(() {
+        _lastLogFlow = {...flow, "sublime": updatedSublime};
+      });
+    } finally {
+      if (!_disposed && mounted) {
+        trySetState(() {
+          _isFlowLoading = false;
+        });
+      }
+    }
+  }
+
+  Widget _buildLogFlow(Map<String, dynamic> flow) {
+    final sublime = flow["sublime"];
+    final result = sublime is Map<String, dynamic>
+        ? sublime
+        : <String, dynamic>{};
+    final hit = result["hit"] is Map<String, dynamic>
+        ? result["hit"] as Map<String, dynamic>
+        : <String, dynamic>{};
+    final tagLines = result["current_file_tag_lines"] is List
+        ? result["current_file_tag_lines"] as List
+        : const [];
+    final success = result["success"] == true;
+    final tag = (flow["tag"] ?? "").toString();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _tagLogSummary(
+          tag: tag,
+          timestamp: (flow["timestamp"] ?? "").toString(),
+          file: (hit["file"] ?? "").toString(),
+          hitLine: hit["line"],
+          mode: (hit["mode"] ?? "").toString(),
+          count: tagLines.length,
+          success: success,
+          error: (result["error"] ?? "").toString(),
+        ),
+        const SizedBox(height: 12),
+        if (_isFlowLoading)
+          _loadingSummary()
+        else if (!success)
+          _emptyTagLogPanel("未找到匹配日志")
+        else if (tagLines.isEmpty)
+          _emptyTagLogPanel("当前没有输入 Tag，或命中文件中没有同 Tag 的其他日志。")
+        else
+          _flowTagLines(tagLines, hit["line"], tag),
+      ],
+    );
+  }
+
+  Widget _loadingSummary() {
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: const Color(0xff102033),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xff1d3554)),
+      ),
+      child: const Row(
+        children: [
+          SizedBox(
+            width: 18,
+            height: 18,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+          SizedBox(width: 12),
+          Text(
+            "正在加载当前文件 Tag 汇总...",
+            style: TextStyle(color: Colors.white70, fontSize: 13),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _tagLogSummary({
+    required String tag,
+    required String timestamp,
+    required String file,
+    required dynamic hitLine,
+    required String mode,
+    required int count,
+    required bool success,
+    required String error,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xff102033),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: (success ? const Color(0xff38bdf8) : const Color(0xfffb7185))
+              .withValues(alpha: 0.65),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                success ? Icons.manage_search : Icons.error_outline,
+                color: success
+                    ? const Color(0xff38bdf8)
+                    : const Color(0xfffb7185),
+                size: 18,
+              ),
+              const SizedBox(width: 8),
+              Text(
+                success ? "当前文件 Tag 汇总" : "检索失败",
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 14,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const Spacer(),
+              Text(
+                success ? "$count条" : error,
+                style: TextStyle(
+                  color: success ? Colors.white54 : const Color(0xfffb7185),
+                  fontSize: 12,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          SelectableText(
+            [
+              "Tag: ${tag.isEmpty ? "无" : tag}",
+              "时间戳: $timestamp",
+              "模式: $mode",
+              "命中行: $hitLine",
+              "文件: $file",
+            ].join("\n"),
+            style: const TextStyle(
+              color: Colors.white70,
+              fontSize: 12,
+              height: 1.45,
+              fontFamily: "monospace",
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _emptyTagLogPanel(String message) {
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: const Color(0xff102033),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xff1d3554)),
+      ),
+      child: Text(
+        message,
+        style: const TextStyle(color: Colors.white54, fontSize: 13),
+      ),
+    );
+  }
+
+  Widget _flowTagLines(List<dynamic> tagLines, dynamic hitLine, String tag) {
+    final hitLineNo = hitLine is num ? hitLine.toInt() : -1;
+    final items = tagLines.toList().reversed.toList();
+
+    return Container(
+      decoration: BoxDecoration(
+        color: const Color(0xff26313d),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xff3b4652)),
+      ),
+      child: Column(
+        children: [
+          for (var i = 0; i < items.length; i++)
+            _flowTagLine(
+              item: items[i],
+              tag: tag,
+              isHit:
+                  items[i] is Map &&
+                  (items[i]["line"] is num) &&
+                  (items[i]["line"] as num).toInt() == hitLineNo,
+              isLast: i == items.length - 1,
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _flowTagLine({
+    required dynamic item,
+    required String tag,
+    required bool isHit,
+    required bool isLast,
+  }) {
+    final data = item is Map ? item : const {};
+    final line = data["line"] ?? "";
+    final text = data["text"] ?? "";
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+      decoration: BoxDecoration(
+        color: isHit
+            ? const Color(0xff1f3a2d).withValues(alpha: 0.9)
+            : Colors.transparent,
+        border: Border(
+          bottom: BorderSide(
+            color: isLast ? Colors.transparent : const Color(0xff3b4652),
+          ),
+        ),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 56,
+            child: Text(
+              "$line:",
+              textAlign: TextAlign.right,
+              style: const TextStyle(
+                color: Color(0xffff5d63),
+                fontSize: 12,
+                fontFamily: "monospace",
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: SelectableText.rich(
+              TextSpan(
+                children: _highlightTagSpans(text.toString(), tag, isHit),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  List<TextSpan> _highlightTagSpans(String text, String tag, bool isHit) {
+    final baseStyle = TextStyle(
+      color: isHit ? const Color(0xffd1fae5) : const Color(0xffd7e0ea),
+      fontSize: 12,
+      height: 1.35,
+      fontFamily: "monospace",
+    );
+
+    final query = tag.trim();
+
+    if (query.isEmpty) {
+      return [TextSpan(text: text, style: baseStyle)];
+    }
+
+    final lowerText = text.toLowerCase();
+    final lowerQuery = query.toLowerCase();
+    final spans = <TextSpan>[];
+    var start = 0;
+
+    while (true) {
+      final index = lowerText.indexOf(lowerQuery, start);
+
+      if (index < 0) {
+        spans.add(TextSpan(text: text.substring(start), style: baseStyle));
+        break;
+      }
+
+      if (index > start) {
+        spans.add(
+          TextSpan(text: text.substring(start, index), style: baseStyle),
+        );
+      }
+
+      spans.add(
+        TextSpan(
+          text: text.substring(index, index + query.length),
+          style: baseStyle.copyWith(
+            color: const Color(0xffd8f3ff),
+            backgroundColor: const Color(0xff2b5a70),
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      );
+
+      start = index + query.length;
+    }
+
+    return spans;
+  }
+
   Widget _buildBugDescriptionCard() {
     return _glassCard(
       padding: const EdgeInsets.all(14),
@@ -846,10 +1473,7 @@ class _DropAreaState extends State<DropArea> {
                 if (subtitles.isNotEmpty)
                   Text(
                     "${subtitles.length}段",
-                    style: const TextStyle(
-                      color: Colors.white38,
-                      fontSize: 12,
-                    ),
+                    style: const TextStyle(color: Colors.white38, fontSize: 12),
                   ),
               ],
             ),
@@ -858,7 +1482,7 @@ class _DropAreaState extends State<DropArea> {
               child: SingleChildScrollView(
                 child: SelectableText(
                   bugDescription.isEmpty
-                      ? (_isVoiceProcessing ? "正在提取录屏语音..." : "暂无语音描述")
+                      ? (_isVoiceProcessing ? voiceStatus : "暂无语音描述")
                       : bugDescription,
                   style: TextStyle(
                     color: bugDescription.isEmpty
@@ -936,7 +1560,7 @@ class _DropAreaState extends State<DropArea> {
             radius: 11,
             backgroundColor: color,
             child: Text(
-              "${index + 1}",
+              "${logs.length - index}",
               style: const TextStyle(fontSize: 11, color: Colors.white),
             ),
           ),
@@ -969,16 +1593,7 @@ class _DropAreaState extends State<DropArea> {
             path.endsWith('.avi') ||
             path.endsWith('.mov') ||
             path.endsWith('.mkv')) {
-          trySetState(() {
-            videoPath = path;
-            _currentPosition = Duration.zero;
-            _duration = Duration.zero;
-            subtitles.clear();
-            bugDescription = "";
-            subtitlesPath = null;
-          });
-
-          await player.open(Media(path), play: false);
+          await _loadVideo(path);
 
           if (_disposed || !mounted) return;
         } else if (path.endsWith('.zip')) {
@@ -986,6 +1601,7 @@ class _DropAreaState extends State<DropArea> {
             zipPath = path;
             zipDirs = [];
             selectedZipDir = null;
+            _lastLogFlow = null;
             logs.insert(0, "检测到ZIP文件\n${fileName(path)}\n\n开始自动解压...");
           });
 
@@ -1019,12 +1635,16 @@ class _DropAreaState extends State<DropArea> {
               tagController: tagController,
               rangeController: rangeController,
               isProcessing: _isProcessing,
+              hasLogFlow: _lastLogFlow != null,
               onZipDirChanged: (value) {
                 trySetState(() {
                   selectedZipDir = value;
                 });
               },
               onStart: null,
+              onShowLogFlow: () {
+                unawaited(_showLogFlowDialog());
+              },
               onReset: _resetConditions,
             ),
             Expanded(
