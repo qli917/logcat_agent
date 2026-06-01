@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 
 class AppTitleBar extends StatelessWidget {
   final List<String> zipDirs;
+  final TextEditingController sourceDirController;
   final String? selectedZipDir;
   final TextEditingController tagController;
   final TextEditingController rangeController;
@@ -10,12 +11,14 @@ class AppTitleBar extends StatelessWidget {
   final bool hasLogFlow;
   final ValueChanged<String?> onZipDirChanged;
   final VoidCallback? onStart;
+  final VoidCallback onPickSourceDir;
   final VoidCallback? onShowLogFlow;
   final VoidCallback onReset;
 
   const AppTitleBar({
     super.key,
     required this.zipDirs,
+    required this.sourceDirController,
     required this.selectedZipDir,
     required this.tagController,
     required this.rangeController,
@@ -23,196 +26,390 @@ class AppTitleBar extends StatelessWidget {
     required this.hasLogFlow,
     required this.onZipDirChanged,
     required this.onStart,
+    required this.onPickSourceDir,
     required this.onShowLogFlow,
     required this.onReset,
   });
 
+  InputDecoration _fieldDecoration({
+    required String hintText,
+    Widget? prefixIcon,
+    double horizontalPadding = 12,
+    double verticalPadding = 10,
+  }) {
+    return InputDecoration(
+      hintText: hintText,
+      hintStyle: const TextStyle(color: Colors.white38, fontSize: 12),
+      filled: true,
+      fillColor: const Color(0xff152235),
+      prefixIcon: prefixIcon == null
+          ? null
+          : Padding(
+              padding: const EdgeInsets.only(left: 10, right: 8),
+              child: prefixIcon,
+            ),
+      prefixIconConstraints: const BoxConstraints(minWidth: 0, minHeight: 0),
+      contentPadding: EdgeInsets.symmetric(
+        horizontal: horizontalPadding,
+        vertical: verticalPadding,
+      ),
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(10),
+        borderSide: const BorderSide(color: Color(0xff2c405d)),
+      ),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(10),
+        borderSide: const BorderSide(color: Color(0xff2c405d)),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(10),
+        borderSide: const BorderSide(color: Color(0xff3b82f6), width: 1.2),
+      ),
+    );
+  }
+
+  BoxDecoration _fieldBoxDecoration() {
+    return BoxDecoration(
+      color: const Color(0xff152235),
+      borderRadius: BorderRadius.circular(10),
+      border: Border.all(color: const Color(0xff2c405d)),
+    );
+  }
+
+  ButtonStyle _actionStyle({
+    required Color background,
+    required Color foreground,
+    required Color border,
+  }) {
+    return OutlinedButton.styleFrom(
+      backgroundColor: background,
+      foregroundColor: foreground,
+      side: BorderSide(color: border),
+      padding: const EdgeInsets.symmetric(horizontal: 14),
+      minimumSize: const Size(0, 38),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      textStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    return WindowTitleBarBox(
-      child: Container(
-        height: 42,
-        color: const Color(0xff181818),
-        child: Row(
-          children: [
-            const SizedBox(width: 18),
+    final canShowFlow = hasLogFlow;
 
-            SizedBox(
-              width: 500,
-              height: 32,
-              child: DropdownButtonFormField<String>(
-                value: selectedZipDir,
-                isExpanded: true,
-                dropdownColor: const Color(0xff111f34),
-                decoration: InputDecoration(
-                  hintText: "拖入ZIP后自动读取目录",
-                  hintStyle: const TextStyle(
-                    color: Colors.white38,
-                    fontSize: 12,
-                  ),
-                  filled: true,
-                  fillColor: const Color(0xff242424),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(6),
-                    borderSide: const BorderSide(color: Color(0xff333333)),
-                  ),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(6),
-                    borderSide: const BorderSide(color: Color(0xff333333)),
-                  ),
-                  contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 10,
-                    vertical: 6,
-                  ),
-                ),
-                items: zipDirs
-                    .map(
-                      (dir) => DropdownMenuItem(
-                        value: dir,
-                        child: Text(
-                          dir,
-                          overflow: TextOverflow.ellipsis,
+    return SizedBox(
+      height: 104,
+      child: Container(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            colors: [Color(0xff09111d), Color(0xff0b1522), Color(0xff08101a)],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+          border: Border(bottom: BorderSide(color: Color(0xff18304b))),
+        ),
+        child: ClipRect(
+          child: Column(
+            mainAxisSize: MainAxisSize.max,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              SizedBox(
+                height: 44,
+                child: Row(
+                  children: [
+                    SizedBox(
+                      width: 180,
+                      child: MoveWindow(
+                        child: Row(
+                          children: [
+                            const SizedBox(width: 12),
+                            const Icon(
+                              Icons.bolt_outlined,
+                              color: Color(0xff4fc3f7),
+                              size: 18,
+                            ),
+                            const SizedBox(width: 7),
+                            const Text(
+                              "debugvideoagent",
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w700,
+                                fontSize: 14,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Container(
+                        height: 34,
+                        padding: const EdgeInsets.all(3),
+                        decoration: BoxDecoration(
+                          color: const Color(0xff0c1624),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: const Color(0xff27415f)),
+                        ),
+                        child: TextField(
+                          controller: sourceDirController,
+                          readOnly: true,
                           style: const TextStyle(
+                            color: Colors.white,
                             fontSize: 12,
-                            color: Colors.white70,
+                          ),
+                          decoration: _fieldDecoration(
+                            hintText: "项目源码目录",
+                            prefixIcon: const Icon(
+                              Icons.source_outlined,
+                              size: 16,
+                              color: Colors.white54,
+                            ),
+                            horizontalPadding: 10,
+                            verticalPadding: 7,
                           ),
                         ),
                       ),
-                    )
-                    .toList(),
-                onChanged: zipDirs.isEmpty ? null : onZipDirChanged,
+                    ),
+                    const SizedBox(width: 6),
+                    Tooltip(
+                      message: "选择项目源码目录",
+                      child: SizedBox(
+                        width: 36,
+                        height: 34,
+                        child: OutlinedButton(
+                          onPressed: onPickSourceDir,
+                          style:
+                              _actionStyle(
+                                background: const Color(0xff122033),
+                                foreground: Colors.white70,
+                                border: const Color(0xff2c405d),
+                              ).copyWith(
+                                padding: const WidgetStatePropertyAll(
+                                  EdgeInsets.zero,
+                                ),
+                                minimumSize: const WidgetStatePropertyAll(
+                                  Size(36, 34),
+                                ),
+                              ),
+                          child: const Icon(Icons.folder_open, size: 17),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    WindowButton(
+                      colors: WindowButtonColors(
+                        iconNormal: Colors.white54,
+                        mouseOver: const Color(0xff24344a),
+                        mouseDown: const Color(0xff30445f),
+                      ),
+                      icon: Icons.remove,
+                      onPressed: () => appWindow.minimize(),
+                    ),
+                    WindowButton(
+                      colors: WindowButtonColors(
+                        iconNormal: Colors.white54,
+                        mouseOver: const Color(0xff24344a),
+                        mouseDown: const Color(0xff30445f),
+                      ),
+                      icon: Icons.crop_square,
+                      onPressed: () => appWindow.maximizeOrRestore(),
+                    ),
+                    WindowButton(
+                      colors: WindowButtonColors(
+                        iconNormal: Colors.white54,
+                        mouseOver: const Color(0xffda3b3b),
+                        mouseDown: const Color(0xffbf2f2f),
+                      ),
+                      icon: Icons.close,
+                      onPressed: () => appWindow.close(),
+                    ),
+                  ],
+                ),
               ),
-            ),
-
-            const SizedBox(width: 10),
-
-            SizedBox(
-              width: 220,
-              height: 32,
-              child: TextField(
-                controller: tagController,
-                style: const TextStyle(color: Colors.white70, fontSize: 12),
-                decoration: InputDecoration(
-                  hintText: "Tag关键词",
-                  hintStyle: const TextStyle(
-                    color: Colors.white38,
-                    fontSize: 12,
-                  ),
-                  filled: true,
-                  fillColor: const Color(0xff242424),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(6),
-                    borderSide: const BorderSide(color: Color(0xff333333)),
-                  ),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(6),
-                    borderSide: const BorderSide(color: Color(0xff333333)),
-                  ),
-                  contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 10,
-                    vertical: 6,
+              Container(height: 1, color: const Color(0xff18304b)),
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 7, 12, 8),
+                  child: SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      children: [
+                        SizedBox(
+                          width: 320,
+                          child: Container(
+                            height: 38,
+                            padding: const EdgeInsets.symmetric(horizontal: 8),
+                            decoration: _fieldBoxDecoration(),
+                            child: DropdownButtonHideUnderline(
+                              child: DropdownButton<String>(
+                                value: zipDirs.contains(selectedZipDir)
+                                    ? selectedZipDir
+                                    : null,
+                                isExpanded: true,
+                                icon: const Icon(
+                                  Icons.expand_more,
+                                  color: Colors.white54,
+                                ),
+                                dropdownColor: const Color(0xff101c2b),
+                                hint: Row(
+                                  children: const [
+                                    Icon(
+                                      Icons.folder_zip_outlined,
+                                      size: 16,
+                                      color: Colors.white54,
+                                    ),
+                                    SizedBox(width: 8),
+                                    Expanded(
+                                      child: Text(
+                                        "拖入 ZIP 后自动读取目录",
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          color: Colors.white38,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                items: zipDirs
+                                    .map(
+                                      (dir) => DropdownMenuItem(
+                                        value: dir,
+                                        child: Text(
+                                          dir,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: const TextStyle(
+                                            fontSize: 12,
+                                            color: Colors.white70,
+                                          ),
+                                        ),
+                                      ),
+                                    )
+                                    .toList(),
+                                onChanged: zipDirs.isEmpty
+                                    ? null
+                                    : onZipDirChanged,
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        SizedBox(
+                          width: 180,
+                          child: TextField(
+                            controller: tagController,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 12,
+                            ),
+                            decoration: _fieldDecoration(
+                              hintText: "Tag关键词",
+                              prefixIcon: const Icon(
+                                Icons.sell_outlined,
+                                size: 16,
+                                color: Colors.white54,
+                              ),
+                              verticalPadding: 8,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        SizedBox(
+                          width: 84,
+                          child: TextField(
+                            controller: rangeController,
+                            keyboardType: TextInputType.number,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 12,
+                            ),
+                            decoration: _fieldDecoration(
+                              hintText: "±ms",
+                              prefixIcon: const Icon(
+                                Icons.timelapse_outlined,
+                                size: 16,
+                                color: Colors.white54,
+                              ),
+                              horizontalPadding: 8,
+                              verticalPadding: 8,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        SizedBox(
+                          height: 36,
+                          child: OutlinedButton.icon(
+                            onPressed: onShowLogFlow,
+                            icon: const Icon(
+                              Icons.account_tree_outlined,
+                              size: 15,
+                            ),
+                            label: const Text(
+                              "日志流程图",
+                              style: TextStyle(fontSize: 12),
+                            ),
+                            style: _actionStyle(
+                              background: const Color(0xff13304b),
+                              foreground: canShowFlow
+                                  ? Colors.white
+                                  : Colors.white54,
+                              border: const Color(0xff2c405d),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        SizedBox(
+                          height: 36,
+                          child: OutlinedButton.icon(
+                            onPressed: onReset,
+                            icon: const Icon(Icons.refresh_rounded, size: 15),
+                            label: const Text(
+                              "重置",
+                              style: TextStyle(fontSize: 12),
+                            ),
+                            style: _actionStyle(
+                              background: const Color(0xff122033),
+                              foreground: Colors.white70,
+                              border: const Color(0xff2c405d),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ),
-            ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
 
-            const SizedBox(width: 10),
+class WindowButton extends StatelessWidget {
+  final WindowButtonColors colors;
+  final IconData icon;
+  final VoidCallback onPressed;
 
-            SizedBox(
-              width: 90,
-              height: 32,
-              child: TextField(
-                controller: rangeController,
-                keyboardType: TextInputType.number,
-                style: const TextStyle(color: Colors.white70, fontSize: 12),
-                decoration: InputDecoration(
-                  hintText: "±ms",
-                  hintStyle: const TextStyle(
-                    color: Colors.white38,
-                    fontSize: 12,
-                  ),
-                  filled: true,
-                  fillColor: const Color(0xff242424),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(6),
-                    borderSide: const BorderSide(color: Color(0xff333333)),
-                  ),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(6),
-                    borderSide: const BorderSide(color: Color(0xff333333)),
-                  ),
-                  contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 10,
-                    vertical: 6,
-                  ),
-                ),
-              ),
-            ),
+  const WindowButton({
+    super.key,
+    required this.colors,
+    required this.icon,
+    required this.onPressed,
+  });
 
-            const SizedBox(width: 10),
-
-            SizedBox(
-              height: 32,
-              child: OutlinedButton.icon(
-                onPressed: onShowLogFlow,
-                icon: const Icon(Icons.account_tree_outlined, size: 15),
-                label: const Text("日志流程图", style: TextStyle(fontSize: 12)),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: hasLogFlow ? Colors.white60 : Colors.white38,
-                  side: const BorderSide(color: Color(0xff333333)),
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(6),
-                  ),
-                ),
-              ),
-            ),
-
-            const SizedBox(width: 10),
-
-            SizedBox(
-              height: 32,
-              child: OutlinedButton.icon(
-                onPressed: onReset,
-                icon: const Icon(Icons.refresh, size: 15),
-                label: const Text("重置", style: TextStyle(fontSize: 12)),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: Colors.white60,
-                  side: const BorderSide(color: Color(0xff333333)),
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(6),
-                  ),
-                ),
-              ),
-            ),
-
-            Expanded(child: MoveWindow(child: const SizedBox.expand())),
-
-            MinimizeWindowButton(
-              colors: WindowButtonColors(
-                iconNormal: Colors.white54,
-                mouseOver: const Color(0xff333333),
-                mouseDown: const Color(0xff444444),
-              ),
-            ),
-
-            MaximizeWindowButton(
-              colors: WindowButtonColors(
-                iconNormal: Colors.white54,
-                mouseOver: const Color(0xff333333),
-                mouseDown: const Color(0xff444444),
-              ),
-            ),
-
-            CloseWindowButton(
-              colors: WindowButtonColors(
-                iconNormal: Colors.white54,
-                mouseOver: Colors.red,
-                mouseDown: Colors.redAccent,
-              ),
-            ),
-          ],
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: onPressed,
+        child: Container(
+          width: 42,
+          height: 42,
+          color: Colors.transparent,
+          child: Center(child: Icon(icon, color: colors.iconNormal, size: 18)),
         ),
       ),
     );

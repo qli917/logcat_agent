@@ -8,6 +8,7 @@ import numpy as np
 import subprocess
 import json
 import shutil
+import glob
 from flask import Flask, request, jsonify
 from datetime import datetime
 from collections import Counter
@@ -30,6 +31,7 @@ DEFAULT_WHISPER_MODEL_PATH = os.path.join(BASE_DIR, "models", "faster-whisper-sm
 DEBUG_ROOT = os.path.join(BASE_DIR, "debug_ocr")
 DEFAULT_EXTRACT_DIR = os.path.join(PROJECT_ROOT, "log_hunter_extracted")
 SUBTITLE_ROOT = os.path.join(PROJECT_ROOT, "log_hunter_subtitles")
+IDE_CACHE_PATH = os.path.join(PROJECT_ROOT, ".debugvideoagent_ide.json")
 
 os.makedirs(DEBUG_ROOT, exist_ok=True)
 os.makedirs(SUBTITLE_ROOT, exist_ok=True)
@@ -128,10 +130,14 @@ def get_whisper_model():
             "缺少 faster_whisper，请先安装 Python 依赖: pip install faster-whisper"
         ) from e
 
-    model_size = os.environ.get(
-        "LOGCAT_AGENT_WHISPER_MODEL",
-        DEFAULT_WHISPER_MODEL_PATH if os.path.exists(DEFAULT_WHISPER_MODEL_PATH) else "small",
-    )
+    model_size = os.environ.get("LOGCAT_AGENT_WHISPER_MODEL")
+    if not model_size:
+        if not os.path.exists(DEFAULT_WHISPER_MODEL_PATH):
+            raise FileNotFoundError(
+                f"本地 Whisper 模型不存在: {DEFAULT_WHISPER_MODEL_PATH}"
+            )
+
+        model_size = DEFAULT_WHISPER_MODEL_PATH
     device = "cuda" if torch.cuda.is_available() else "cpu"
     compute_type = "float16" if device == "cuda" else "int8"
 
@@ -861,6 +867,262 @@ def open_sublime_hit(hit):
     ])
 
 
+def extract_source_candidates(log_text):
+    text = log_text or ""
+    candidates = []
+
+    for match in re.finditer(r"\b([A-Za-z_][A-Za-z0-9_.$]*)\s*:", text):
+        value = match.group(1).strip(".")
+        if not value or value in candidates:
+            continue
+
+        candidates.append(value)
+
+        if "_" in value:
+            suffix = value.split("_")[-1]
+            if suffix and suffix not in candidates:
+                candidates.append(suffix)
+
+    return candidates
+
+
+def extract_method_candidate(log_text):
+    match = re.search(r":\s*([A-Za-z_][A-Za-z0-9_]*)\s*\(", log_text or "")
+    return match.group(1) if match else ""
+
+
+def source_file_candidates(root, class_name):
+    source_exts = (".kt", ".java", ".aidl")
+    ignored_dirs = {
+        ".git",
+        ".gradle",
+        ".idea",
+        "build",
+        ".dart_tool",
+        "node_modules",
+        "log_hunter_extracted",
+        "log_hunter_subtitles",
+    }
+    exact_names = {f"{class_name}{ext}" for ext in source_exts}
+    matches = []
+
+    for current_root, dirs, files in os.walk(root):
+        dirs[:] = [
+            item
+            for item in dirs
+            if item not in ignored_dirs and not item.startswith(".")
+        ]
+
+        for name in files:
+            if name in exact_names:
+                return [os.path.join(current_root, name)]
+
+            if name.endswith(source_exts) and class_name in name:
+                matches.append(os.path.join(current_root, name))
+
+    return matches
+
+
+def find_source_line(file_path, method_name, class_name):
+    line_no = 1
+
+    if not method_name and not class_name:
+        return line_no
+
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            lines = list(f)
+    except Exception:
+        return line_no
+
+    if method_name:
+        method_pattern = re.compile(
+            r"\b(fun|void|boolean|int|long|float|double|String|public|private|protected|static|final|override)\b.*\b"
+            + re.escape(method_name)
+            + r"\s*\("
+        )
+        for index, line in enumerate(lines, start=1):
+            if method_pattern.search(line) or re.search(
+                r"\b" + re.escape(method_name) + r"\s*\(",
+                line,
+            ):
+                return index
+
+    if class_name:
+        class_pattern = re.compile(
+            r"\b(class|object|interface|enum)\s+"
+            + re.escape(class_name)
+            + r"\b"
+        )
+        for index, line in enumerate(lines, start=1):
+            if class_pattern.search(line):
+                return index
+
+    return line_no
+
+
+def existing_command_candidates(candidates):
+    commands = []
+
+    for candidate in candidates:
+        if not candidate:
+            continue
+
+        resolved = (
+            shutil.which(candidate)
+            if os.path.basename(candidate) == candidate
+            else candidate
+        )
+
+        if resolved and os.path.exists(resolved) and os.access(resolved, os.X_OK):
+            if resolved not in commands:
+                commands.append(resolved)
+
+    return commands
+
+
+def read_ide_cache():
+    try:
+        with open(IDE_CACHE_PATH, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+
+        command = payload.get("command")
+
+        if (
+            command
+            and os.path.exists(command)
+            and os.access(command, os.X_OK)
+        ):
+            return command
+    except Exception:
+        return None
+
+    return None
+
+
+def write_ide_cache(command):
+    try:
+        with open(IDE_CACHE_PATH, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "command": command,
+                    "updated_at": datetime.now().isoformat(timespec="seconds"),
+                },
+                f,
+                ensure_ascii=False,
+                indent=2,
+            )
+    except Exception:
+        logger.exception("写入 IDE 路径缓存失败")
+
+
+def scan_android_studio_installations():
+    home = os.path.expanduser("~")
+    patterns = [
+        os.path.join(home, "android", "android-studio*", "android-studio", "bin", "studio.sh"),
+        os.path.join(home, "android", "android-studio*", "android-studio", "bin", "studio"),
+        os.path.join(home, "Android", "android-studio*", "bin", "studio.sh"),
+        os.path.join(home, "Android", "android-studio*", "bin", "studio"),
+        os.path.join(home, "android-studio*", "bin", "studio.sh"),
+        os.path.join(home, "android-studio*", "bin", "studio"),
+        "/opt/android-studio*/bin/studio.sh",
+        "/opt/android-studio*/bin/studio",
+        "/usr/local/android-studio*/bin/studio.sh",
+        "/usr/local/android-studio*/bin/studio",
+        "/snap/bin/android-studio",
+        "/var/lib/flatpak/exports/bin/com.google.AndroidStudio",
+        os.path.join(home, ".local", "share", "flatpak", "exports", "bin", "com.google.AndroidStudio"),
+    ]
+
+    candidates = []
+
+    for pattern in patterns:
+        candidates.extend(glob.glob(pattern))
+
+    return sorted(set(candidates))
+
+
+def android_studio_commands():
+    configured = os.environ.get("LOGCAT_AGENT_ANDROID_STUDIO_CMD") or os.environ.get(
+        "ANDROID_STUDIO_CMD"
+    )
+
+    cached = read_ide_cache()
+    commands = existing_command_candidates(
+        [
+            configured,
+            cached,
+            "studio",
+            "studio.sh",
+            "android-studio",
+            "idea",
+            "idea.sh",
+            "/usr/local/bin/studio",
+            "/opt/android-studio/bin/studio.sh",
+            "/opt/android-studio/bin/studio",
+            os.path.expanduser("~/android-studio/bin/studio.sh"),
+        ]
+        + scan_android_studio_installations()
+    )
+
+    if commands:
+        write_ide_cache(commands[0])
+
+    return commands
+
+
+def open_source_file(file_path, line_no):
+    commands = android_studio_commands()
+
+    if commands:
+        subprocess.Popen([commands[0], "--line", str(max(line_no, 1)), file_path])
+        return commands[0]
+
+    raise FileNotFoundError(
+        "找不到 Android Studio/IDEA 命令行工具。请在 Android Studio 里创建 Command-line Launcher，"
+        "或设置环境变量 LOGCAT_AGENT_ANDROID_STUDIO_CMD=/path/to/studio.sh"
+    )
+
+
+def locate_and_open_source(source_root, log_text):
+    root = os.path.abspath(source_root or "")
+
+    if not root or not os.path.isdir(root):
+        return {
+            "success": False,
+            "error": "项目源码目录不存在",
+            "source_root": source_root,
+        }
+
+    candidates = extract_source_candidates(log_text)
+    method_name = extract_method_candidate(log_text)
+
+    for class_name in candidates:
+        files = source_file_candidates(root, class_name)
+
+        for file_path in files:
+            line_no = find_source_line(file_path, method_name, class_name)
+            command = open_source_file(file_path, line_no)
+
+            return {
+                "success": True,
+                "source_root": root,
+                "class_name": class_name,
+                "method_name": method_name,
+                "file": file_path,
+                "line": line_no,
+                "command": command,
+            }
+
+    return {
+        "success": False,
+        "error": "未找到对应源码文件",
+        "source_root": root,
+        "candidates": candidates,
+        "method_name": method_name,
+    }
+
+
 def call_sublime_plugin(timestamp, tag="", log_dir=""):
     try:
         real_log_dir = resolve_log_dir(log_dir)
@@ -1058,6 +1320,30 @@ def open_log_hit():
         }), 500
 
 
+@app.route("/open_source_hit", methods=["POST"])
+def open_source_hit():
+    try:
+        payload = request.get_json(silent=True) or {}
+        source_root = (payload.get("source_root") or "").strip()
+        log_text = (payload.get("text") or "").strip()
+
+        if not log_text:
+            return jsonify({"error": "missing text"}), 400
+
+        result = locate_and_open_source(source_root, log_text)
+        status = 200 if result.get("success") else 404
+
+        return jsonify(result), status
+
+    except Exception as e:
+        logger.exception("打开源码接口异常")
+
+        return jsonify({
+            "error": str(e),
+            "type": type(e).__name__,
+        }), 500
+
+
 @app.route("/open_by_timestamp", methods=["POST"])
 def open_by_timestamp():
     try:
@@ -1123,6 +1409,8 @@ def debug_path():
         "subtitle_root": SUBTITLE_ROOT,
         "model_path": MODEL_PATH,
         "model_exists": os.path.exists(MODEL_PATH),
+        "ide_cache_path": IDE_CACHE_PATH,
+        "android_studio_commands": android_studio_commands(),
         "device": DEVICE,
         "img_w": IMG_W,
         "img_h": IMG_H,
@@ -1135,6 +1423,12 @@ if __name__ == "__main__":
     import logging as flask_logging
 
     flask_logging.getLogger("werkzeug").setLevel(logging.ERROR)
+    ide_commands = android_studio_commands()
+
+    if ide_commands:
+        logger.info("Android Studio 命令已发现: %s", ide_commands[0])
+    else:
+        logger.warning("未发现 Android Studio/IDEA 命令行工具")
 
     app.run(
         host="127.0.0.1",

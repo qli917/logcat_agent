@@ -94,6 +94,7 @@ class DropArea extends StatefulWidget {
 
 class _DropAreaState extends State<DropArea> {
   static const _tagKeywordCacheKey = "tag_keyword";
+  static const _sourceDirCacheKey = "source_dir";
 
   late final Player player = Player();
 
@@ -110,6 +111,9 @@ class _DropAreaState extends State<DropArea> {
   String? selectedZipDir;
   List<String> zipDirs = [];
 
+  final sourceDirController = TextEditingController(
+    text: Directory.current.path,
+  );
   final tagController = TextEditingController();
   final rangeController = TextEditingController(text: "500");
 
@@ -120,6 +124,7 @@ class _DropAreaState extends State<DropArea> {
   String voiceStatus = "";
   Map<String, dynamic>? _lastLogFlow;
   bool _isFlowLoading = false;
+  static const int _flowPageSize = 100;
 
   bool _isProcessing = false;
   bool _isVoiceProcessing = false;
@@ -143,6 +148,7 @@ class _DropAreaState extends State<DropArea> {
     super.initState();
 
     _loadCachedTagKeyword();
+    _loadCachedSourceDir();
     tagController.addListener(_saveTagKeyword);
 
     _positionSub = player.stream.position.listen((position) {
@@ -180,6 +186,7 @@ class _DropAreaState extends State<DropArea> {
     _playingSub?.cancel();
 
     tagController.removeListener(_saveTagKeyword);
+    sourceDirController.dispose();
     tagController.dispose();
     rangeController.dispose();
 
@@ -216,6 +223,25 @@ class _DropAreaState extends State<DropArea> {
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(_tagKeywordCacheKey, tagController.text);
+    } catch (_) {}
+  }
+
+  Future<void> _loadCachedSourceDir() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final cachedSourceDir = prefs.getString(_sourceDirCacheKey);
+
+      if (cachedSourceDir == null || !mounted || _disposed) return;
+      if (!Directory(cachedSourceDir).existsSync()) return;
+
+      sourceDirController.text = cachedSourceDir;
+    } catch (_) {}
+  }
+
+  Future<void> _saveSourceDir(String path) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_sourceDirCacheKey, path);
     } catch (_) {}
   }
 
@@ -415,20 +441,38 @@ class _DropAreaState extends State<DropArea> {
   }
 
   void _resetConditions() {
+    final subtitleFile = subtitlesPath;
+
     trySetState(() {
       _voiceJobId++;
       _isVoiceProcessing = false;
       _transcribingVideoPath = null;
-      selectedZipDir = zipDirs.isNotEmpty ? zipDirs.first : null;
-      tagController.clear();
-      rangeController.text = "500";
+      videoPath = null;
+      _currentPosition = Duration.zero;
+      _duration = Duration.zero;
+      _isPlaying = false;
       subtitles.clear();
       bugDescription = "";
       subtitlesPath = null;
       voiceStatus = "";
       _lastLogFlow = null;
       logs.clear();
+      tagController.clear();
+      rangeController.text = "500";
     });
+
+    try {
+      player.stop();
+    } catch (_) {}
+
+    if (subtitleFile != null && subtitleFile.isNotEmpty) {
+      try {
+        final file = File(subtitleFile);
+        if (file.existsSync()) {
+          file.deleteSync();
+        }
+      } catch (_) {}
+    }
   }
 
   String _currentSubtitleText() {
@@ -763,49 +807,63 @@ class _DropAreaState extends State<DropArea> {
     return Column(
       children: [
         Expanded(
-          child: Video(
-            key: ValueKey(videoPath),
-            controller: controller,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              Video(
+                key: ValueKey(videoPath),
+                controller: controller,
 
-            // 关键：禁用 media_kit_video 默认控制条
-            // 1.1.10 版本用这个方式
-            controls: (_) => const SizedBox.shrink(),
+                // 关键：禁用 media_kit_video 默认控制条
+                // 1.1.10 版本用这个方式
+                controls: (_) => const SizedBox.shrink(),
+              ),
+              _buildVideoSubtitleOverlay(),
+            ],
           ),
         ),
-        _buildSubtitleBar(),
         _buildNativeProgressBar(),
       ],
     );
   }
 
-  Widget _buildSubtitleBar() {
+  Widget _buildVideoSubtitleOverlay() {
     final text = _currentSubtitleText();
+    final displayText = text.isEmpty
+        ? (_isVoiceProcessing
+              ? voiceStatus
+              : videoPath == null
+              ? ""
+              : "等待自动识别字幕")
+        : text;
 
-    return Container(
-      width: double.infinity,
-      constraints: const BoxConstraints(minHeight: 44),
-      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
-      decoration: const BoxDecoration(
-        color: Color(0xff08111f),
-        border: Border(top: BorderSide(color: Color(0xff1d3554))),
-      ),
-      child: Center(
-        child: Text(
-          text.isEmpty
-              ? (_isVoiceProcessing
-                    ? voiceStatus
-                    : videoPath == null
-                    ? "暂无字幕"
-                    : "等待自动识别字幕")
-              : text,
-          maxLines: 2,
-          overflow: TextOverflow.ellipsis,
-          textAlign: TextAlign.center,
-          style: TextStyle(
-            color: text.isEmpty ? Colors.white38 : Colors.white,
-            fontSize: 15,
-            height: 1.35,
-            fontWeight: text.isEmpty ? FontWeight.normal : FontWeight.w600,
+    if (displayText.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    return IgnorePointer(
+      child: Align(
+        alignment: Alignment.bottomCenter,
+        child: Container(
+          margin: const EdgeInsets.fromLTRB(18, 0, 18, 18),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          constraints: const BoxConstraints(maxWidth: 780),
+          decoration: BoxDecoration(
+            color: const Color(0xff050b16).withValues(alpha: 0.62),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: const Color(0xff1d3554)),
+          ),
+          child: Text(
+            displayText,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 15,
+              height: 1.35,
+              fontWeight: FontWeight.w600,
+            ),
           ),
         ),
       ),
@@ -986,13 +1044,7 @@ class _DropAreaState extends State<DropArea> {
   Widget _buildRightPanel() {
     return Padding(
       padding: const EdgeInsets.fromLTRB(10, 20, 20, 20),
-      child: Column(
-        children: [
-          _buildBugDescriptionCard(),
-          const SizedBox(height: 14),
-          Expanded(child: _buildLogCard()),
-        ],
-      ),
+      child: Column(children: [Expanded(child: _buildLogCard())]),
     );
   }
 
@@ -1035,62 +1087,79 @@ class _DropAreaState extends State<DropArea> {
     Navigator.of(context, rootNavigator: true).pop();
 
     final flow = _lastLogFlow!;
+    var visibleCount = _flowPageSize;
 
     showDialog(
       context: context,
       builder: (context) {
-        return Dialog(
-          backgroundColor: const Color(0xff0b1626),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
-            side: const BorderSide(color: Color(0xff1d3554)),
-          ),
-          child: SizedBox(
-            width: 980,
-            height: 620,
-            child: Column(
-              children: [
-                Container(
-                  height: 54,
-                  padding: const EdgeInsets.symmetric(horizontal: 18),
-                  decoration: const BoxDecoration(
-                    border: Border(
-                      bottom: BorderSide(color: Color(0xff1d3554)),
-                    ),
-                  ),
-                  child: Row(
-                    children: [
-                      const Icon(
-                        Icons.account_tree_outlined,
-                        color: Color(0xff38bdf8),
-                        size: 20,
-                      ),
-                      const SizedBox(width: 10),
-                      const Text(
-                        "Tag日志汇总",
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 16,
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return Dialog(
+              backgroundColor: const Color(0xff0b1626),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+                side: const BorderSide(color: Color(0xff1d3554)),
+              ),
+              child: SizedBox(
+                width: 980,
+                height: 620,
+                child: Column(
+                  children: [
+                    Container(
+                      height: 54,
+                      padding: const EdgeInsets.symmetric(horizontal: 18),
+                      decoration: const BoxDecoration(
+                        border: Border(
+                          bottom: BorderSide(color: Color(0xff1d3554)),
                         ),
                       ),
-                      const Spacer(),
-                      IconButton(
-                        onPressed: () => Navigator.of(context).pop(),
-                        icon: const Icon(Icons.close, color: Colors.white54),
+                      child: Row(
+                        children: [
+                          const Icon(
+                            Icons.account_tree_outlined,
+                            color: Color(0xff38bdf8),
+                            size: 20,
+                          ),
+                          const SizedBox(width: 10),
+                          const Text(
+                            "Tag日志汇总",
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 16,
+                            ),
+                          ),
+                          const Spacer(),
+                          IconButton(
+                            onPressed: () => Navigator.of(context).pop(),
+                            icon: const Icon(
+                              Icons.close,
+                              color: Colors.white54,
+                            ),
+                          ),
+                        ],
                       ),
-                    ],
-                  ),
+                    ),
+                    Expanded(
+                      child: SingleChildScrollView(
+                        padding: const EdgeInsets.all(18),
+                        child: _buildLogFlow(
+                          flow,
+                          visibleCount,
+                          onLoadMore: (total) {
+                            setDialogState(() {
+                              visibleCount = (visibleCount + _flowPageSize)
+                                  .clamp(_flowPageSize, total);
+                            });
+                          },
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
-                Expanded(
-                  child: SingleChildScrollView(
-                    padding: const EdgeInsets.all(18),
-                    child: _buildLogFlow(flow),
-                  ),
-                ),
-              ],
-            ),
-          ),
+              ),
+            );
+          },
         );
       },
     );
@@ -1111,28 +1180,14 @@ class _DropAreaState extends State<DropArea> {
 
     final logDir = (flow["log_dir"] ?? "").toString();
     final tag = (flow["tag"] ?? "").toString();
-    final file = (hit["file"] ?? "").toString();
-    final line = hit["line"] is num ? (hit["line"] as num).toInt() : 1;
 
-    if (logDir.isEmpty || tag.trim().isEmpty || file.isEmpty) return;
+    if (logDir.isEmpty || tag.trim().isEmpty) return;
 
     trySetState(() {
       _isFlowLoading = true;
     });
 
     try {
-      final response = await http
-          .post(
-            Uri.parse("http://127.0.0.1:5000/open_log_hit"),
-            headers: const {"Content-Type": "application/json"},
-            body: jsonEncode({"file": file, "line": line}),
-          )
-          .timeout(const Duration(seconds: 5));
-
-      if (response.statusCode != 200) {
-        throw Exception(response.body);
-      }
-
       final result = await processFiles(
         targetTimestamp: (flow["timestamp"] ?? "").toString(),
         zipPath: zipPath ?? "",
@@ -1168,7 +1223,11 @@ class _DropAreaState extends State<DropArea> {
     }
   }
 
-  Widget _buildLogFlow(Map<String, dynamic> flow) {
+  Widget _buildLogFlow(
+    Map<String, dynamic> flow,
+    int visibleCount, {
+    required void Function(int total) onLoadMore,
+  }) {
     final sublime = flow["sublime"];
     final result = sublime is Map<String, dynamic>
         ? sublime
@@ -1179,6 +1238,9 @@ class _DropAreaState extends State<DropArea> {
     final tagLines = result["current_file_tag_lines"] is List
         ? result["current_file_tag_lines"] as List
         : const [];
+    final visibleItemsCount = tagLines.length < visibleCount
+        ? tagLines.length
+        : visibleCount;
     final success = result["success"] == true;
     final tag = (flow["tag"] ?? "").toString();
 
@@ -1191,7 +1253,7 @@ class _DropAreaState extends State<DropArea> {
           file: (hit["file"] ?? "").toString(),
           hitLine: hit["line"],
           mode: (hit["mode"] ?? "").toString(),
-          count: tagLines.length,
+          count: visibleItemsCount,
           success: success,
           error: (result["error"] ?? "").toString(),
         ),
@@ -1203,7 +1265,15 @@ class _DropAreaState extends State<DropArea> {
         else if (tagLines.isEmpty)
           _emptyTagLogPanel("当前没有输入 Tag，或命中文件中没有同 Tag 的其他日志。")
         else
-          _flowTagLines(tagLines, hit["line"], tag),
+          _flowTagLines(
+            tagLines,
+            hit["line"],
+            tag,
+            (hit["file"] ?? "").toString(),
+            visibleCount: visibleItemsCount,
+            onLoadMore: onLoadMore,
+            totalCount: tagLines.length,
+          ),
       ],
     );
   }
@@ -1320,9 +1390,106 @@ class _DropAreaState extends State<DropArea> {
     );
   }
 
-  Widget _flowTagLines(List<dynamic> tagLines, dynamic hitLine, String tag) {
+  Future<void> _openLogHitInSublime(String file, int line) async {
+    if (_disposed || !mounted || file.trim().isEmpty) return;
+
+    try {
+      final response = await http
+          .post(
+            Uri.parse("http://127.0.0.1:5000/open_log_hit"),
+            headers: const {"Content-Type": "application/json"},
+            body: jsonEncode({"file": file, "line": line}),
+          )
+          .timeout(const Duration(seconds: 5));
+
+      if (response.statusCode != 200) {
+        throw Exception(response.body);
+      }
+    } catch (e) {
+      if (_disposed || !mounted) return;
+
+      trySetState(() {
+        logs.insert(0, "Sublime 跳转失败\n文件: $file\n行号: $line\n异常: $e");
+      });
+    }
+  }
+
+  Future<void> _openSourceForLogLine(String text) async {
+    final sourceRoot = sourceDirController.text.trim();
+
+    if (_disposed || !mounted || text.trim().isEmpty || sourceRoot.isEmpty) {
+      return;
+    }
+
+    try {
+      final response = await http
+          .post(
+            Uri.parse("http://127.0.0.1:5000/open_source_hit"),
+            headers: const {"Content-Type": "application/json"},
+            body: jsonEncode({"source_root": sourceRoot, "text": text}),
+          )
+          .timeout(const Duration(seconds: 8));
+
+      if (response.statusCode != 200) {
+        throw Exception(response.body);
+      }
+
+      final result = jsonDecode(response.body);
+      if (result is Map) {
+        trySetState(() {
+          logs.insert(
+            0,
+            "源码跳转成功\n文件: ${result["file"]}\n行号: ${result["line"]}",
+          );
+        });
+      }
+    } catch (e) {
+      if (_disposed || !mounted) return;
+
+      trySetState(() {
+        logs.insert(0, "源码跳转失败\n源码目录: $sourceRoot\n异常: $e");
+      });
+    }
+  }
+
+  Future<void> _pickSourceDirectory() async {
+    try {
+      final selectedDirectory = await FilePicker.platform.getDirectoryPath(
+        dialogTitle: "选择项目源码目录",
+        initialDirectory: sourceDirController.text.trim().isEmpty
+            ? Directory.current.path
+            : sourceDirController.text.trim(),
+      );
+
+      if (selectedDirectory == null || _disposed || !mounted) return;
+
+      trySetState(() {
+        sourceDirController.text = selectedDirectory;
+      });
+
+      await _saveSourceDir(selectedDirectory);
+    } catch (e) {
+      if (_disposed || !mounted) return;
+
+      trySetState(() {
+        logs.insert(0, "选择项目源码目录失败\n异常: $e");
+      });
+    }
+  }
+
+  Widget _flowTagLines(
+    List<dynamic> tagLines,
+    dynamic hitLine,
+    String tag,
+    String file, {
+    required int visibleCount,
+    required void Function(int total) onLoadMore,
+    required int totalCount,
+  }) {
     final hitLineNo = hitLine is num ? hitLine.toInt() : -1;
     final items = tagLines.toList().reversed.toList();
+    final visibleItems = items.take(visibleCount).toList();
+    final canLoadMore = visibleCount < items.length;
 
     return Container(
       decoration: BoxDecoration(
@@ -1332,15 +1499,30 @@ class _DropAreaState extends State<DropArea> {
       ),
       child: Column(
         children: [
-          for (var i = 0; i < items.length; i++)
+          for (var i = 0; i < visibleItems.length; i++)
             _flowTagLine(
-              item: items[i],
+              item: visibleItems[i],
               tag: tag,
+              file: file,
               isHit:
-                  items[i] is Map &&
-                  (items[i]["line"] is num) &&
-                  (items[i]["line"] as num).toInt() == hitLineNo,
-              isLast: i == items.length - 1,
+                  visibleItems[i] is Map &&
+                  (visibleItems[i]["line"] is num) &&
+                  (visibleItems[i]["line"] as num).toInt() == hitLineNo,
+              isLast: i == visibleItems.length - 1 && !canLoadMore,
+            ),
+          if (canLoadMore)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+              child: SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: () {
+                    onLoadMore(totalCount);
+                  },
+                  icon: const Icon(Icons.expand_more, size: 16),
+                  label: Text("加载更多 (${visibleItems.length}/$totalCount)"),
+                ),
+              ),
             ),
         ],
       ),
@@ -1350,50 +1532,88 @@ class _DropAreaState extends State<DropArea> {
   Widget _flowTagLine({
     required dynamic item,
     required String tag,
+    required String file,
     required bool isHit,
     required bool isLast,
   }) {
     final data = item is Map ? item : const {};
     final line = data["line"] ?? "";
     final text = data["text"] ?? "";
+    final lineNo = line is num ? line.toInt() : -1;
 
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-      decoration: BoxDecoration(
-        color: isHit
-            ? const Color(0xff1f3a2d).withValues(alpha: 0.9)
-            : Colors.transparent,
-        border: Border(
-          bottom: BorderSide(
-            color: isLast ? Colors.transparent : const Color(0xff3b4652),
+    return InkWell(
+      onTap: file.trim().isEmpty || lineNo < 0
+          ? null
+          : () {
+              unawaited(_openLogHitInSublime(file, lineNo));
+            },
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+        decoration: BoxDecoration(
+          color: isHit
+              ? const Color(0xff1f3a2d).withValues(alpha: 0.9)
+              : Colors.transparent,
+          border: Border(
+            bottom: BorderSide(
+              color: isLast ? Colors.transparent : const Color(0xff3b4652),
+            ),
           ),
         ),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SizedBox(
-            width: 56,
-            child: Text(
-              "$line:",
-              textAlign: TextAlign.right,
-              style: const TextStyle(
-                color: Color(0xffff5d63),
-                fontSize: 12,
-                fontFamily: "monospace",
-                fontWeight: FontWeight.w700,
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SizedBox(
+              width: 56,
+              child: Text(
+                "$line:",
+                textAlign: TextAlign.right,
+                style: const TextStyle(
+                  color: Color(0xffff5d63),
+                  fontSize: 12,
+                  fontFamily: "monospace",
+                  fontWeight: FontWeight.w700,
+                ),
               ),
             ),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: SelectableText.rich(
-              TextSpan(
-                children: _highlightTagSpans(text.toString(), tag, isHit),
+            const SizedBox(width: 10),
+            Expanded(
+              child: SelectableText.rich(
+                TextSpan(
+                  children: _highlightTagSpans(text.toString(), tag, isHit),
+                ),
               ),
             ),
-          ),
-        ],
+            const SizedBox(width: 8),
+            IconButton(
+              tooltip: "打开源码",
+              icon: const Icon(Icons.code, size: 18, color: Color(0xff86efac)),
+              onPressed: text.toString().trim().isEmpty
+                  ? null
+                  : () {
+                      unawaited(_openSourceForLogLine(text.toString()));
+                    },
+              constraints: const BoxConstraints.tightFor(width: 28, height: 28),
+              padding: EdgeInsets.zero,
+              visualDensity: VisualDensity.compact,
+            ),
+            IconButton(
+              tooltip: "打开 Sublime",
+              icon: const Icon(
+                Icons.open_in_new,
+                size: 18,
+                color: Color(0xff7dd3fc),
+              ),
+              onPressed: file.trim().isEmpty || lineNo < 0
+                  ? null
+                  : () {
+                      unawaited(_openLogHitInSublime(file, lineNo));
+                    },
+              constraints: const BoxConstraints.tightFor(width: 28, height: 28),
+              padding: EdgeInsets.zero,
+              visualDensity: VisualDensity.compact,
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1446,58 +1666,6 @@ class _DropAreaState extends State<DropArea> {
     }
 
     return spans;
-  }
-
-  Widget _buildBugDescriptionCard() {
-    return _glassCard(
-      padding: const EdgeInsets.all(14),
-      child: SizedBox(
-        width: double.infinity,
-        height: 118,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                const Icon(
-                  Icons.record_voice_over_outlined,
-                  color: Color(0xff38bdf8),
-                  size: 18,
-                ),
-                const SizedBox(width: 8),
-                const Text(
-                  "Bug语音描述",
-                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
-                ),
-                const Spacer(),
-                if (subtitles.isNotEmpty)
-                  Text(
-                    "${subtitles.length}段",
-                    style: const TextStyle(color: Colors.white38, fontSize: 12),
-                  ),
-              ],
-            ),
-            const SizedBox(height: 10),
-            Expanded(
-              child: SingleChildScrollView(
-                child: SelectableText(
-                  bugDescription.isEmpty
-                      ? (_isVoiceProcessing ? voiceStatus : "暂无语音描述")
-                      : bugDescription,
-                  style: TextStyle(
-                    color: bugDescription.isEmpty
-                        ? Colors.white38
-                        : Colors.white70,
-                    fontSize: 13,
-                    height: 1.45,
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
   }
 
   Widget _buildLogCard() {
@@ -1631,6 +1799,7 @@ class _DropAreaState extends State<DropArea> {
           children: [
             AppTitleBar(
               zipDirs: zipDirs,
+              sourceDirController: sourceDirController,
               selectedZipDir: selectedZipDir,
               tagController: tagController,
               rangeController: rangeController,
@@ -1642,6 +1811,9 @@ class _DropAreaState extends State<DropArea> {
                 });
               },
               onStart: null,
+              onPickSourceDir: () {
+                unawaited(_pickSourceDirectory());
+              },
               onShowLogFlow: () {
                 unawaited(_showLogFlowDialog());
               },

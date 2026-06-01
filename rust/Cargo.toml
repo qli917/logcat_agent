@@ -19,6 +19,7 @@ lazy_static = "1.4.0"
 lz4 = "1"
 tar = "0.4"
 chrono = "0.4"
+memmap2 = "0.9"
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(frb_expand)'] }

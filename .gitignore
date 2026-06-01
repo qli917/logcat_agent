@@ -84,6 +84,7 @@ rust_builder/target/
 *.jpg
 *.wav
 *.bin
+*.json
 # OS
 .DS_Store
 Thumbs.db

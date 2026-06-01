@@ -1,5 +1,4 @@
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
@@ -8,8 +7,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use chrono::NaiveDateTime;
 use lazy_static::lazy_static;
 use lz4::Decoder;
+use memmap2::Mmap;
 use serde_json::json;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
+use std::sync::Arc;
 use tar::Archive;
 use walkdir::WalkDir;
 use zip::ZipArchive;
@@ -17,6 +18,19 @@ use zip::ZipArchive;
 lazy_static! {
     static ref PYTHON_PROCESS: Mutex<Option<std::process::Child>> = Mutex::new(None);
     static ref LOG_FILE_CACHE: Mutex<HashMap<String, Vec<String>>> = Mutex::new(HashMap::new());
+    static ref LOG_FILE_INDEX_CACHE: Mutex<HashMap<String, Arc<LogFileIndex>>> =
+        Mutex::new(HashMap::new());
+    static ref LOG_FILE_INDEX_ORDER: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
+    static ref LOG_FILE_INDEX_BYTES: Mutex<usize> = Mutex::new(0);
+}
+
+const MAX_LOG_FILE_INDEX_CACHE_FILES: usize = 4;
+const MAX_LOG_FILE_INDEX_CACHE_BYTES: usize = 256 * 1024 * 1024;
+
+struct LogFileIndex {
+    mmap: Arc<Mmap>,
+    line_ranges: Arc<Vec<(usize, usize)>>,
+    size: usize,
 }
 
 pub fn init_python_engine() -> Result<(), String> {
@@ -127,6 +141,7 @@ pub fn prepare_logs_for_zip(zip_path: String) -> String {
     match prepare_logs(&zip_path, &extract_dir) {
         Ok(_) => {
             LOG_FILE_CACHE.lock().unwrap().clear();
+            clear_log_file_index_cache();
             format!("✅ ZIP 自动解压完成\n目录: {}", extract_dir)
         }
         Err(e) => format!("❌ ZIP 自动解压失败\n{}", e),
@@ -159,8 +174,15 @@ pub fn prepare_logs(zip_path: &str, extract_dir: &str) -> Result<(), String> {
     extract_all_tar_lz4_flat(extract_dir)?;
     cleanup_extra_files(extract_dir)?;
     LOG_FILE_CACHE.lock().unwrap().clear();
+    clear_log_file_index_cache();
 
     Ok(())
+}
+
+fn clear_log_file_index_cache() {
+    LOG_FILE_INDEX_CACHE.lock().unwrap().clear();
+    LOG_FILE_INDEX_ORDER.lock().unwrap().clear();
+    *LOG_FILE_INDEX_BYTES.lock().unwrap() = 0;
 }
 
 fn extract_all_tar_lz4_flat(extract_dir: &str) -> Result<(), String> {
@@ -351,16 +373,6 @@ fn normalize_tag(tag: &str) -> String {
         .to_lowercase()
 }
 
-fn line_contains_tag(line: &str, tag: &str) -> bool {
-    let tag = normalize_tag(tag);
-
-    if tag.is_empty() {
-        return true;
-    }
-
-    line.to_lowercase().contains(&tag)
-}
-
 fn normalize_time_key(timestamp: &str) -> String {
     let value = timestamp.trim();
 
@@ -450,6 +462,112 @@ fn collect_main_log_files(log_dir: &str) -> Vec<String> {
     files
 }
 
+fn build_line_ranges(bytes: &[u8]) -> Vec<(usize, usize)> {
+    let mut ranges = Vec::new();
+    let mut start = 0usize;
+
+    for (index, byte) in bytes.iter().enumerate() {
+        if *byte != b'\n' {
+            continue;
+        }
+
+        let mut end = index;
+        if end > start && bytes[end - 1] == b'\r' {
+            end -= 1;
+        }
+
+        ranges.push((start, end));
+        start = index + 1;
+    }
+
+    if start < bytes.len() {
+        let mut end = bytes.len();
+        if end > start && bytes[end - 1] == b'\r' {
+            end -= 1;
+        }
+
+        ranges.push((start, end));
+    }
+
+    ranges
+}
+
+fn touch_log_file_index_order(key: &str) {
+    let mut order = LOG_FILE_INDEX_ORDER.lock().unwrap();
+
+    if let Some(pos) = order.iter().position(|item| item == key) {
+        order.remove(pos);
+    }
+
+    order.push_back(key.to_string());
+}
+
+fn evict_log_file_index_cache_if_needed() {
+    loop {
+        let (too_many_files, too_many_bytes) = {
+            let cache_len = LOG_FILE_INDEX_CACHE.lock().unwrap().len();
+            let total_bytes = *LOG_FILE_INDEX_BYTES.lock().unwrap();
+
+            (
+                cache_len > MAX_LOG_FILE_INDEX_CACHE_FILES,
+                total_bytes > MAX_LOG_FILE_INDEX_CACHE_BYTES,
+            )
+        };
+
+        if !too_many_files && !too_many_bytes {
+            break;
+        }
+
+        let Some(oldest) = LOG_FILE_INDEX_ORDER.lock().unwrap().pop_front() else {
+            break;
+        };
+
+        let removed = LOG_FILE_INDEX_CACHE.lock().unwrap().remove(&oldest);
+        if let Some(entry) = removed {
+            let mut total_bytes = LOG_FILE_INDEX_BYTES.lock().unwrap();
+            *total_bytes = total_bytes.saturating_sub(entry.size);
+        }
+    }
+}
+
+fn get_or_load_log_file_index(file: &str) -> Result<Arc<LogFileIndex>, String> {
+    if let Some(cached) = LOG_FILE_INDEX_CACHE.lock().unwrap().get(file).cloned() {
+        touch_log_file_index_order(file);
+        return Ok(cached);
+    }
+
+    let handle = File::open(file).map_err(|e| format!("打开日志失败 {}: {}", file, e))?;
+    let metadata = handle
+        .metadata()
+        .map_err(|e| format!("读取日志元数据失败 {}: {}", file, e))?;
+    let size = usize::try_from(metadata.len())
+        .map_err(|_| format!("日志文件过大，无法建立索引: {}", file))?;
+
+    let mmap =
+        unsafe { Mmap::map(&handle) }.map_err(|e| format!("内存映射日志失败 {}: {}", file, e))?;
+
+    let line_ranges = build_line_ranges(&mmap);
+    let entry = Arc::new(LogFileIndex {
+        mmap: Arc::new(mmap),
+        line_ranges: Arc::new(line_ranges),
+        size,
+    });
+
+    {
+        let mut cache = LOG_FILE_INDEX_CACHE.lock().unwrap();
+        cache.insert(file.to_string(), entry.clone());
+    }
+
+    touch_log_file_index_order(file);
+    {
+        let mut total_bytes = LOG_FILE_INDEX_BYTES.lock().unwrap();
+        *total_bytes = total_bytes.saturating_add(entry.size);
+    }
+    evict_log_file_index_cache_if_needed();
+
+    Ok(entry)
+}
+
 fn parse_timestamp_for_scoring(timestamp: &str) -> Option<NaiveDateTime> {
     let normalized = normalize_time_key(timestamp);
     let candidate = format!("2026-{}", normalized);
@@ -498,20 +616,23 @@ fn choose_nearest_files(files: &[String], timestamp: &str, limit: usize) -> Vec<
 fn find_hit(files: &[String], time_key: &str, tag: &str) -> Option<serde_json::Value> {
     let mut tag_fallback = None;
     let mut time_fallback = None;
+    let normalized_tag = normalize_tag(tag);
 
     for file in files {
-        let Ok(handle) = File::open(file) else {
+        let Ok(index) = get_or_load_log_file_index(file) else {
             continue;
         };
 
-        for (index, line_result) in BufReader::new(handle).lines().enumerate() {
-            let Ok(line) = line_result else {
-                continue;
-            };
-
-            let line_no = index + 1;
+        for (line_index, (start, end)) in index.line_ranges.iter().enumerate() {
+            let line = String::from_utf8_lossy(&index.mmap[*start..*end]);
+            let line = line.as_ref();
+            let line_no = line_index + 1;
             let has_time = !time_key.is_empty() && line.contains(time_key);
-            let has_tag = line_contains_tag(&line, tag);
+            let has_tag = if normalized_tag.is_empty() {
+                true
+            } else {
+                line.to_lowercase().contains(&normalized_tag)
+            };
 
             if has_time && has_tag {
                 return Some(json!({
@@ -531,7 +652,7 @@ fn find_hit(files: &[String], time_key: &str, tag: &str) -> Option<serde_json::V
                 }));
             }
 
-            if has_tag && tag_fallback.is_none() && !normalize_tag(tag).is_empty() {
+            if has_tag && tag_fallback.is_none() && !normalized_tag.is_empty() {
                 tag_fallback = Some(json!({
                     "file": file,
                     "line": line_no,
@@ -552,23 +673,22 @@ fn collect_current_file_tag_lines(file: &str, tag: &str) -> Vec<serde_json::Valu
         return Vec::new();
     }
 
-    let Ok(handle) = File::open(file) else {
+    let Ok(index) = get_or_load_log_file_index(file) else {
         return Vec::new();
     };
 
     let mut result = Vec::new();
 
-    for (index, line_result) in BufReader::new(handle).lines().enumerate() {
-        let Ok(line) = line_result else {
-            continue;
-        };
+    for (line_index, (start, end)) in index.line_ranges.iter().enumerate() {
+        let line = String::from_utf8_lossy(&index.mmap[*start..*end]);
+        let line = line.as_ref();
 
         if !line.to_lowercase().contains(&tag) {
             continue;
         }
 
         result.push(json!({
-            "line": index + 1,
+            "line": line_index + 1,
             "time": extract_log_time(&line),
             "text": line,
         }));
