@@ -9,6 +9,7 @@ import subprocess
 import json
 import shutil
 import glob
+import requests
 from flask import Flask, request, jsonify
 from datetime import datetime
 from collections import Counter
@@ -37,6 +38,10 @@ DEBUG_ROOT = os.path.join(BASE_DIR, "debug_ocr")
 DEFAULT_EXTRACT_DIR = os.path.join(PROJECT_ROOT, "log_hunter_extracted")
 SUBTITLE_ROOT = os.path.join(PROJECT_ROOT, "log_hunter_subtitles")
 IDE_CACHE_PATH = os.path.join(PROJECT_ROOT, ".logagent_ide.json")
+OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
+OPENAI_MODEL = os.environ.get("LOGCAT_AGENT_OPENAI_MODEL", "gpt-5.5")
+OPENAI_PROXY_URL = os.environ.get("OPENAI_PROXY_URL", "http://127.0.0.1:7897").strip()
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "").strip()
 
 os.makedirs(DEBUG_ROOT, exist_ok=True)
 os.makedirs(SUBTITLE_ROOT, exist_ok=True)
@@ -880,6 +885,241 @@ def open_sublime_hit(hit):
     ])
 
 
+def extract_openai_output_text(payload):
+    if not isinstance(payload, dict):
+        return ""
+
+    output_text = payload.get("output_text")
+    if isinstance(output_text, str) and output_text.strip():
+        return output_text.strip()
+
+    texts = []
+
+    for item in payload.get("output", []):
+        if not isinstance(item, dict):
+            continue
+
+        for content in item.get("content", []):
+            if not isinstance(content, dict):
+                continue
+
+            text = content.get("text")
+            if isinstance(text, str) and text.strip():
+                texts.append(text.strip())
+
+    return "\n".join(texts).strip()
+
+
+def format_openai_request_error(error):
+    message = str(error)
+    hints = []
+
+    if "Network is unreachable" in message or "Failed to establish a new connection" in message:
+        hints.append("当前 Python 服务无法连接 OpenAI 地址，通常是机器无外网或没有配置代理")
+
+    if OPENAI_BASE_URL == "https://api.openai.com/v1":
+        hints.append("如需走代理或中转服务，请设置环境变量 OPENAI_BASE_URL")
+
+    hints.append("如需走本机代理，请设置 HTTPS_PROXY/HTTP_PROXY 后重启应用")
+
+    return (
+        "OpenAI 请求失败\n"
+        f"Base URL: {OPENAI_BASE_URL}\n"
+        f"Proxy: {OPENAI_PROXY_URL or '(none)'}\n"
+        f"异常: {message}\n"
+        f"建议: {'；'.join(hints)}"
+    )
+
+
+def read_source_excerpt(file_path, line_no, radius=35):
+    if not file_path or not os.path.isfile(file_path):
+        return ""
+
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            lines = list(f)
+    except Exception:
+        return ""
+
+    target = max(int(line_no or 1), 1)
+    start = max(target - radius, 1)
+    end = min(target + radius, len(lines))
+    excerpt = []
+
+    for current in range(start, end + 1):
+        excerpt.append(f"{current}: {lines[current - 1].rstrip()}")
+
+    return "\n".join(excerpt)
+
+
+def locate_source_context(source_root, log_text):
+    root = os.path.abspath(source_root or "")
+
+    if not root or not os.path.isdir(root):
+        return {
+            "success": False,
+            "error": "项目源码目录不存在",
+            "source_root": source_root,
+        }
+
+    candidates = extract_source_candidates(log_text)
+    method_name = extract_method_candidate(log_text)
+
+    for class_name in candidates:
+        files = source_file_candidates(root, class_name)
+
+        for file_path in files:
+            line_no = find_source_line(file_path, method_name, class_name)
+            return {
+                "success": True,
+                "source_root": root,
+                "class_name": class_name,
+                "method_name": method_name,
+                "file": file_path,
+                "line": line_no,
+                "excerpt": read_source_excerpt(file_path, line_no),
+            }
+
+    return {
+        "success": False,
+        "error": "未找到对应源码文件",
+        "source_root": root,
+        "candidates": candidates,
+        "method_name": method_name,
+    }
+
+
+def analyze_log_flow_with_openai(flow):
+    api_key = OPENAI_API_KEY
+
+    if not api_key:
+        return {
+            "success": False,
+            "error": "未设置 OPENAI_API_KEY。请 export OPENAI_API_KEY=你的有效 key 后重启应用/Python 服务。",
+        }
+
+    sublime = flow.get("sublime") if isinstance(flow.get("sublime"), dict) else {}
+    hit = sublime.get("hit") if isinstance(sublime.get("hit"), dict) else {}
+    tag_lines = sublime.get("current_file_tag_lines")
+    if not isinstance(tag_lines, list):
+        tag_lines = []
+
+    selected_lines = []
+    for item in tag_lines[:10]:
+        if not isinstance(item, dict):
+            continue
+
+        selected_lines.append(
+            f"{item.get('line', '')} | {item.get('time', '')} | {item.get('text', '')}"
+        )
+
+    voice = flow.get("voice") if isinstance(flow.get("voice"), dict) else {}
+    nearby_subtitles = voice.get("nearby_subtitles")
+    if not isinstance(nearby_subtitles, list):
+        nearby_subtitles = []
+
+    selected_subtitles = []
+    for item in nearby_subtitles[:12]:
+        if not isinstance(item, dict):
+            continue
+
+        selected_subtitles.append(
+            f"{item.get('start', '')}-{item.get('end', '')}s | {item.get('text', '')}"
+        )
+
+    source_context = locate_source_context(
+        flow.get("source_root") or "",
+        hit.get("text") or (tag_lines[0].get("text") if tag_lines and isinstance(tag_lines[0], dict) else ""),
+    )
+    source_excerpt = source_context.get("excerpt") if source_context.get("success") else ""
+
+    system_prompt = (
+        "你是车机日志和 Android 源码分析助手。只能基于输入的 10 条日志、语音字幕和源码片段推理，"
+        "不能编造输入中没有的事实。回答要直接给出问题总结和可执行解决方案。"
+    )
+    user_prompt = (
+        "请结合下面信息分析问题，输出：\n"
+        "1. 问题总结\n"
+        "2. 日志证据\n"
+        "3. 语音字幕佐证\n"
+        "4. 源码关联\n"
+        "5. 解决方案\n"
+        "6. 置信度\n\n"
+        f"Tag: {(flow.get('tag') or '')}\n"
+        f"时间戳: {(flow.get('timestamp') or '')}\n"
+        f"日志文件: {hit.get('file', '')}\n\n"
+        "对应 Tag 的 10 条日志：\n"
+        f"{chr(10).join(selected_lines) if selected_lines else '(empty)'}\n\n"
+        "语音字幕/Bug描述：\n"
+        f"{voice.get('bug_description') or '(empty)'}\n\n"
+        "当前时间附近字幕：\n"
+        f"{chr(10).join(selected_subtitles) if selected_subtitles else '(empty)'}\n\n"
+        "源码定位：\n"
+        f"文件: {source_context.get('file', '')}\n"
+        f"行号: {source_context.get('line', '')}\n"
+        f"类: {source_context.get('class_name', '')}\n"
+        f"方法: {source_context.get('method_name', '')}\n"
+        f"定位状态: {source_context.get('error', 'success')}\n\n"
+        "源码片段：\n"
+        f"{source_excerpt if source_excerpt else '(empty)'}\n"
+    )
+
+    body = {
+        "model": os.environ.get("LOGCAT_AGENT_OPENAI_MODEL", OPENAI_MODEL),
+        "instructions": system_prompt,
+        "input": user_prompt,
+        "max_output_tokens": 700,
+    }
+    proxies = (
+        {
+            "http": OPENAI_PROXY_URL,
+            "https": OPENAI_PROXY_URL,
+        }
+        if OPENAI_PROXY_URL
+        else None
+    )
+
+    try:
+        response = requests.post(
+            f"{OPENAI_BASE_URL}/responses",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json=body,
+            proxies=proxies,
+            timeout=300,
+        )
+    except Exception as e:
+        return {"success": False, "error": format_openai_request_error(e)}
+
+    try:
+        payload = response.json()
+    except Exception:
+        payload = {}
+
+    if response.status_code >= 400:
+        message = ""
+        if isinstance(payload, dict) and isinstance(payload.get("error"), dict):
+            message = payload["error"].get("message") or ""
+
+        return {
+            "success": False,
+            "error": message or response.text,
+            "status_code": response.status_code,
+            "model": body["model"],
+        }
+
+    analysis = extract_openai_output_text(payload)
+
+    return {
+        "success": bool(analysis),
+        "analysis": analysis,
+        "error": "" if analysis else "OpenAI 返回内容为空",
+        "model": body["model"],
+    }
+
+
 def extract_source_candidates(log_text):
     text = log_text or ""
     candidates = []
@@ -1384,6 +1624,24 @@ def open_by_timestamp():
 
     except Exception as e:
         logger.exception("按时间戳打开 Sublime 接口异常")
+
+        return jsonify({
+            "error": str(e),
+            "type": type(e).__name__,
+        }), 500
+
+
+@app.route("/analyze_log_flow", methods=["POST"])
+def analyze_log_flow():
+    try:
+        payload = request.get_json(silent=True) or {}
+        result = analyze_log_flow_with_openai(payload)
+        status = 200 if result.get("success") else 400
+
+        return jsonify(result), status
+
+    except Exception as e:
+        logger.exception("OpenAI 日志分析接口异常")
 
         return jsonify({
             "error": str(e),

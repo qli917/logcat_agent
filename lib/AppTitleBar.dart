@@ -7,11 +7,9 @@ class AppTitleBar extends StatelessWidget {
   final String? selectedZipDir;
   final TextEditingController tagController;
   final bool isProcessing;
-  final bool hasLogFlow;
   final ValueChanged<String?> onZipDirChanged;
   final VoidCallback? onStart;
   final VoidCallback onPickSourceDir;
-  final VoidCallback? onShowLogFlow;
   final VoidCallback onReset;
 
   const AppTitleBar({
@@ -21,11 +19,9 @@ class AppTitleBar extends StatelessWidget {
     required this.selectedZipDir,
     required this.tagController,
     required this.isProcessing,
-    required this.hasLogFlow,
     required this.onZipDirChanged,
     required this.onStart,
     required this.onPickSourceDir,
-    required this.onShowLogFlow,
     required this.onReset,
   });
 
@@ -92,8 +88,6 @@ class AppTitleBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final canShowFlow = hasLogFlow;
-
     return SizedBox(
       height: 56,
       child: Container(
@@ -273,28 +267,6 @@ class AppTitleBar extends StatelessWidget {
                         ),
                       ),
                       const SizedBox(width: 8),
-                      SizedBox(
-                        height: 36,
-                        child: OutlinedButton.icon(
-                          onPressed: onShowLogFlow,
-                          icon: const Icon(
-                            Icons.account_tree_outlined,
-                            size: 15,
-                          ),
-                          label: const Text(
-                            "日志流程图",
-                            style: TextStyle(fontSize: 12),
-                          ),
-                          style: _actionStyle(
-                            background: const Color(0xff13304b),
-                            foreground: canShowFlow
-                                ? Colors.white
-                                : Colors.white54,
-                            border: const Color(0xff2c405d),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 6),
                       SizedBox(
                         height: 36,
                         child: OutlinedButton.icon(

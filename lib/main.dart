@@ -83,6 +83,19 @@ class SubtitleSegment {
     final seconds = position.inMilliseconds / 1000.0;
     return seconds >= start && seconds <= end;
   }
+
+  Map<String, dynamic> toJson() {
+    return {"start": start, "end": end, "text": text};
+  }
+}
+
+class ProcessLogEntry {
+  final String text;
+  final Map<String, dynamic>? flow;
+
+  const ProcessLogEntry(this.text, {this.flow});
+
+  bool get hasActions => flow != null;
 }
 
 class DropArea extends StatefulWidget {
@@ -117,14 +130,11 @@ class _DropAreaState extends State<DropArea> {
   );
   final tagController = TextEditingController();
 
-  List<String> logs = [];
+  List<ProcessLogEntry> logs = [];
   List<SubtitleSegment> subtitles = [];
   String bugDescription = "";
   String? subtitlesPath;
   String voiceStatus = "";
-  Map<String, dynamic>? _lastLogFlow;
-  bool _isFlowLoading = false;
-  static const int _flowPageSize = 100;
 
   bool _isProcessing = false;
   bool _isVoiceProcessing = false;
@@ -205,6 +215,10 @@ class _DropAreaState extends State<DropArea> {
       if (!mounted || _disposed) return;
       setState(fn);
     } catch (_) {}
+  }
+
+  void _insertLog(String text, {Map<String, dynamic>? flow}) {
+    logs.insert(0, ProcessLogEntry(text, flow: flow));
   }
 
   Future<void> _loadCachedTagKeyword() async {
@@ -482,7 +496,6 @@ class _DropAreaState extends State<DropArea> {
       voiceStatus = "等待自动识别语音字幕...";
       _isVoiceProcessing = false;
       _transcribingVideoPath = null;
-      _lastLogFlow = null;
     });
 
     await player.open(Media(path), play: false);
@@ -510,7 +523,6 @@ class _DropAreaState extends State<DropArea> {
       bugDescription = "";
       subtitlesPath = null;
       voiceStatus = "";
-      _lastLogFlow = null;
       logs.clear();
     });
 
@@ -558,7 +570,7 @@ class _DropAreaState extends State<DropArea> {
 
     if (targetVideoPath == null) {
       trySetState(() {
-        logs.insert(0, "缺少视频\n请先拖入或选择视频文件");
+        _insertLog("缺少视频\n请先拖入或选择视频文件");
       });
       return;
     }
@@ -567,7 +579,7 @@ class _DropAreaState extends State<DropArea> {
       _isVoiceProcessing = true;
       _transcribingVideoPath = targetVideoPath;
       voiceStatus = "正在检查 Python 语音服务...";
-      logs.insert(0, "开始自动语音识别\n视频: ${fileName(targetVideoPath)}");
+      _insertLog("开始自动语音识别\n视频: ${fileName(targetVideoPath)}");
     });
 
     try {
@@ -617,8 +629,7 @@ class _DropAreaState extends State<DropArea> {
         voiceStatus = "";
         _isVoiceProcessing = false;
         _transcribingVideoPath = null;
-        logs.insert(
-          0,
+        _insertLog(
           "语音识别完成\n音频: $audioPath\n字幕: ${subtitlesPath ?? ""}\n"
           "字幕片段: ${subtitles.length}\n\nBug描述:\n$bugDescription",
         );
@@ -631,7 +642,7 @@ class _DropAreaState extends State<DropArea> {
         _isVoiceProcessing = false;
         _transcribingVideoPath = null;
         voiceStatus = "";
-        logs.insert(0, "语音识别异常\n$e");
+        _insertLog("语音识别异常\n$e");
       });
     }
   }
@@ -658,7 +669,7 @@ class _DropAreaState extends State<DropArea> {
 
     if (videoPath == null || zipPath == null) {
       trySetState(() {
-        logs.insert(0, "缺少文件\n请先拖入视频和 ZIP 文件");
+        _insertLog("缺少文件\n请先拖入视频和 ZIP 文件");
       });
       return false;
     }
@@ -752,6 +763,10 @@ class _DropAreaState extends State<DropArea> {
         "timestamp": timestamp,
         "tag": tag,
         "log_dir": logDir,
+        "zip_path": zipPath ?? "",
+        "zip_inner_dir": selectedZipDir ?? "",
+        "video_time_ms": timeMs.toInt(),
+        "source_root": sourceDirController.text.trim(),
         "sublime": openResult,
         "hit_file": hit is Map ? (hit["file"] ?? "").toString() : "",
         "hit_line": hit is Map ? hit["line"] : 1,
@@ -764,8 +779,7 @@ class _DropAreaState extends State<DropArea> {
 
       trySetState(() {
         _isProcessing = false;
-        _lastLogFlow = flow;
-        logs.insert(0, log);
+        _insertLog(log, flow: flow);
       });
 
       _showActionButton();
@@ -777,7 +791,7 @@ class _DropAreaState extends State<DropArea> {
 
       trySetState(() {
         _isProcessing = false;
-        logs.insert(0, log);
+        _insertLog(log);
       });
 
       _showActionButton();
@@ -802,6 +816,28 @@ class _DropAreaState extends State<DropArea> {
       "current_file_tag_lines": <Map<String, dynamic>>[],
       "current_file_tag_total": 0,
     };
+  }
+
+  Future<Map<String, dynamic>> _requestLogFlowAnalysis(
+    Map<String, dynamic> flow,
+  ) async {
+    final response = await http
+        .post(
+          Uri.parse("http://127.0.0.1:5000/analyze_log_flow"),
+          headers: const {"Content-Type": "application/json"},
+          body: jsonEncode(flow),
+        )
+        .timeout(const Duration(minutes: 5));
+
+    final decoded = _decodePythonJson(response, "/analyze_log_flow");
+
+    if (decoded["success"] != true) {
+      throw Exception(
+        decoded["error"]?.toString() ?? "OpenAI 分析失败 (${response.statusCode})",
+      );
+    }
+
+    return decoded;
   }
 
   Widget _glassCard({
@@ -1101,387 +1137,6 @@ class _DropAreaState extends State<DropArea> {
     );
   }
 
-  Future<void> _showLogFlowDialog() async {
-    if (_lastLogFlow == null) {
-      return;
-    }
-
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) {
-        return const AlertDialog(
-          backgroundColor: Color(0xff0b1626),
-          content: SizedBox(
-            width: 260,
-            child: Row(
-              children: [
-                SizedBox(
-                  width: 18,
-                  height: 18,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                ),
-                SizedBox(width: 12),
-                Text(
-                  "正在加载当前文件 Tag 汇总...",
-                  style: TextStyle(color: Colors.white70, fontSize: 13),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-
-    await _loadTagSummaryIfNeeded();
-
-    if (_disposed || !mounted || _lastLogFlow == null) return;
-
-    Navigator.of(context, rootNavigator: true).pop();
-
-    final flow = _lastLogFlow!;
-    var visibleCount = _flowPageSize;
-
-    showDialog(
-      context: context,
-      builder: (context) {
-        return StatefulBuilder(
-          builder: (context, setDialogState) {
-            return Dialog(
-              backgroundColor: const Color(0xff0b1626),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-                side: const BorderSide(color: Color(0xff1d3554)),
-              ),
-              child: SizedBox(
-                width: 980,
-                height: 620,
-                child: Column(
-                  children: [
-                    Container(
-                      height: 54,
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 18,
-                        vertical: 8,
-                      ),
-                      decoration: const BoxDecoration(
-                        border: Border(
-                          bottom: BorderSide(color: Color(0xff1d3554)),
-                        ),
-                      ),
-                      child: _logFlowTitle(flow, () {
-                        Navigator.of(context).pop();
-                      }),
-                    ),
-                    if (_isFlowLoading)
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(18, 18, 18, 0),
-                        child: _loadingSummary(),
-                      ),
-                    Expanded(
-                      child: SingleChildScrollView(
-                        padding: const EdgeInsets.all(18),
-                        child: _buildLogFlow(
-                          flow,
-                          visibleCount,
-                          onLoadMore: (total) {
-                            setDialogState(() {
-                              visibleCount = (visibleCount + _flowPageSize)
-                                  .clamp(_flowPageSize, total);
-                            });
-                          },
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            );
-          },
-        );
-      },
-    );
-  }
-
-  Future<void> _loadTagSummaryIfNeeded() async {
-    final flow = _lastLogFlow;
-    if (flow == null || _isFlowLoading) return;
-
-    final sublime = flow["sublime"];
-    if (sublime is! Map) return;
-
-    final hit = sublime["hit"];
-    if (hit is! Map) return;
-
-    final cachedLines = sublime["current_file_tag_lines"];
-    if (cachedLines is List && cachedLines.isNotEmpty) return;
-
-    final logDir = (flow["log_dir"] ?? "").toString();
-    final tag = (flow["tag"] ?? "").toString();
-
-    if (logDir.isEmpty || tag.trim().isEmpty) return;
-
-    trySetState(() {
-      _isFlowLoading = true;
-    });
-
-    try {
-      final result = await processFiles(
-        targetTimestamp: (flow["timestamp"] ?? "").toString(),
-        zipPath: zipPath ?? "",
-        zipInnerDir: selectedZipDir ?? "",
-        tagKeyword: tag,
-        rangeMs: _defaultRangeMs,
-      );
-
-      final decoded = _decodeRustSearchResult(result);
-      final lines = decoded["current_file_tag_lines"];
-
-      if (_disposed || !mounted || _lastLogFlow == null) return;
-
-      final updatedSublime = Map<String, dynamic>.from(sublime);
-      updatedSublime["current_file_tag_lines"] = lines is List
-          ? lines
-                .whereType<Map>()
-                .map((item) => Map<String, dynamic>.from(item))
-                .toList()
-          : <Map<String, dynamic>>[];
-      updatedSublime["current_file_tag_total"] =
-          (updatedSublime["current_file_tag_lines"] as List).length;
-
-      trySetState(() {
-        _lastLogFlow = {...flow, "sublime": updatedSublime};
-      });
-    } finally {
-      if (!_disposed && mounted) {
-        trySetState(() {
-          _isFlowLoading = false;
-        });
-      }
-    }
-  }
-
-  Widget _buildLogFlow(
-    Map<String, dynamic> flow,
-    int visibleCount, {
-    required void Function(int total) onLoadMore,
-  }) {
-    final sublime = flow["sublime"];
-    final result = sublime is Map<String, dynamic>
-        ? sublime
-        : <String, dynamic>{};
-    final hit = result["hit"] is Map<String, dynamic>
-        ? result["hit"] as Map<String, dynamic>
-        : <String, dynamic>{};
-    final tagLines = result["current_file_tag_lines"] is List
-        ? result["current_file_tag_lines"] as List
-        : const [];
-    final visibleItemsCount = tagLines.length < visibleCount
-        ? tagLines.length
-        : visibleCount;
-    final success = result["success"] == true;
-    final tag = (flow["tag"] ?? "").toString();
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        if (_isFlowLoading)
-          const SizedBox.shrink()
-        else if (!success)
-          _emptyTagLogPanel("未找到匹配日志")
-        else if (tagLines.isEmpty)
-          _emptyTagLogPanel("当前没有输入 Tag，或命中文件中没有同 Tag 的其他日志。")
-        else
-          _flowTagLines(
-            tagLines,
-            hit["line"],
-            tag,
-            (hit["file"] ?? "").toString(),
-            visibleCount: visibleItemsCount,
-            onLoadMore: onLoadMore,
-            totalCount: tagLines.length,
-          ),
-      ],
-    );
-  }
-
-  Widget _logFlowTitle(Map<String, dynamic> flow, VoidCallback onClose) {
-    final sublime = flow["sublime"];
-    final result = sublime is Map<String, dynamic>
-        ? sublime
-        : <String, dynamic>{};
-    final hit = result["hit"] is Map<String, dynamic>
-        ? result["hit"] as Map<String, dynamic>
-        : <String, dynamic>{};
-    final tagLines = result["current_file_tag_lines"] is List
-        ? result["current_file_tag_lines"] as List
-        : const [];
-    final success = result["success"] == true;
-    final tag = (flow["tag"] ?? "").toString();
-    final timestamp = (flow["timestamp"] ?? "").toString();
-    final mode = (hit["mode"] ?? "").toString();
-    final hitLine = hit["line"]?.toString() ?? "";
-    final error = (result["error"] ?? "").toString();
-
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.center,
-      children: [
-        Icon(
-          success ? Icons.manage_search : Icons.error_outline,
-          color: success ? const Color(0xff38bdf8) : const Color(0xfffb7185),
-          size: 20,
-        ),
-        const SizedBox(width: 10),
-        Expanded(
-          child: Row(
-            children: [
-              Text(
-                success ? "当前文件 Tag 汇总" : "检索失败",
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 15,
-                ),
-              ),
-              const SizedBox(width: 10),
-              Text(
-                success ? "${tagLines.length}条" : error,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: success ? Colors.white54 : const Color(0xfffb7185),
-                  fontSize: 12,
-                ),
-              ),
-              const SizedBox(width: 14),
-              Flexible(
-                child: SelectableText(
-                  [
-                    "Tag: ${tag.isEmpty ? "无" : tag}",
-                    "时间戳: $timestamp",
-                    "模式: $mode",
-                    "命中行: $hitLine",
-                  ].join("    "),
-                  maxLines: 1,
-                  style: const TextStyle(
-                    color: Colors.white70,
-                    fontSize: 12,
-                    fontFamily: "monospace",
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-        IconButton(
-          onPressed: onClose,
-          icon: const Icon(Icons.close, color: Colors.white54),
-        ),
-      ],
-    );
-  }
-
-  Widget _loadingSummary() {
-    return Container(
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        color: const Color(0xff102033),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: const Color(0xff1d3554)),
-      ),
-      child: const Row(
-        children: [
-          SizedBox(
-            width: 18,
-            height: 18,
-            child: CircularProgressIndicator(strokeWidth: 2),
-          ),
-          SizedBox(width: 12),
-          Text(
-            "正在加载当前文件 Tag 汇总...",
-            style: TextStyle(color: Colors.white70, fontSize: 13),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _emptyTagLogPanel(String message) {
-    return Container(
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        color: const Color(0xff102033),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: const Color(0xff1d3554)),
-      ),
-      child: Text(
-        message,
-        style: const TextStyle(color: Colors.white54, fontSize: 13),
-      ),
-    );
-  }
-
-  Future<void> _openLogHitInSublime(String file, int line) async {
-    if (_disposed || !mounted || file.trim().isEmpty) return;
-
-    try {
-      final response = await http
-          .post(
-            Uri.parse("http://127.0.0.1:5000/open_log_hit"),
-            headers: const {"Content-Type": "application/json"},
-            body: jsonEncode({"file": file, "line": line}),
-          )
-          .timeout(const Duration(seconds: 5));
-
-      if (response.statusCode != 200) {
-        throw Exception(response.body);
-      }
-    } catch (e) {
-      if (_disposed || !mounted) return;
-
-      trySetState(() {
-        logs.insert(0, "Sublime 跳转失败\n文件: $file\n行号: $line\n异常: $e");
-      });
-    }
-  }
-
-  Future<void> _openSourceForLogLine(String text) async {
-    final sourceRoot = sourceDirController.text.trim();
-
-    if (_disposed || !mounted || text.trim().isEmpty || sourceRoot.isEmpty) {
-      return;
-    }
-
-    try {
-      final response = await http
-          .post(
-            Uri.parse("http://127.0.0.1:5000/open_source_hit"),
-            headers: const {"Content-Type": "application/json"},
-            body: jsonEncode({"source_root": sourceRoot, "text": text}),
-          )
-          .timeout(const Duration(seconds: 8));
-
-      if (response.statusCode != 200) {
-        throw Exception(response.body);
-      }
-
-      final result = jsonDecode(response.body);
-      if (result is Map) {
-        trySetState(() {
-          logs.insert(
-            0,
-            "源码跳转成功\n文件: ${result["file"]}\n行号: ${result["line"]}",
-          );
-        });
-      }
-    } catch (e) {
-      if (_disposed || !mounted) return;
-
-      trySetState(() {
-        logs.insert(0, "源码跳转失败\n源码目录: $sourceRoot\n异常: $e");
-      });
-    }
-  }
-
   Future<void> _pickSourceDirectory() async {
     try {
       final selectedDirectory = await FilePicker.platform.getDirectoryPath(
@@ -1502,200 +1157,188 @@ class _DropAreaState extends State<DropArea> {
       if (_disposed || !mounted) return;
 
       trySetState(() {
-        logs.insert(0, "选择项目源码目录失败\n异常: $e");
+        _insertLog("选择项目源码目录失败\n异常: $e");
       });
     }
   }
 
-  Widget _flowTagLines(
-    List<dynamic> tagLines,
-    dynamic hitLine,
-    String tag,
-    String file, {
-    required int visibleCount,
-    required void Function(int total) onLoadMore,
-    required int totalCount,
-  }) {
-    final hitLineNo = hitLine is num ? hitLine.toInt() : -1;
-    final items = tagLines.toList().reversed.toList();
-    final visibleItems = items.take(visibleCount).toList();
-    final canLoadMore = visibleCount < items.length;
+  Map<String, dynamic> _entrySublime(ProcessLogEntry entry) {
+    final flow = entry.flow;
+    final sublime = flow?["sublime"];
 
-    return Container(
-      decoration: BoxDecoration(
-        color: const Color(0xff26313d),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: const Color(0xff3b4652)),
-      ),
-      child: Column(
-        children: [
-          for (var i = 0; i < visibleItems.length; i++)
-            _flowTagLine(
-              item: visibleItems[i],
-              tag: tag,
-              file: file,
-              isHit:
-                  visibleItems[i] is Map &&
-                  (visibleItems[i]["line"] is num) &&
-                  (visibleItems[i]["line"] as num).toInt() == hitLineNo,
-              isLast: i == visibleItems.length - 1 && !canLoadMore,
-            ),
-          if (canLoadMore)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
-              child: SizedBox(
-                width: double.infinity,
-                child: OutlinedButton.icon(
-                  onPressed: () {
-                    onLoadMore(totalCount);
-                  },
-                  icon: const Icon(Icons.expand_more, size: 16),
-                  label: Text("加载更多 (${visibleItems.length}/$totalCount)"),
-                ),
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-
-  Widget _flowTagLine({
-    required dynamic item,
-    required String tag,
-    required String file,
-    required bool isHit,
-    required bool isLast,
-  }) {
-    final data = item is Map ? item : const {};
-    final line = data["line"] ?? "";
-    final text = data["text"] ?? "";
-    final lineNo = line is num ? line.toInt() : -1;
-
-    return InkWell(
-      onTap: file.trim().isEmpty || lineNo < 0
-          ? null
-          : () {
-              unawaited(_openLogHitInSublime(file, lineNo));
-            },
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-        decoration: BoxDecoration(
-          color: isHit
-              ? const Color(0xff1f3a2d).withValues(alpha: 0.9)
-              : Colors.transparent,
-          border: Border(
-            bottom: BorderSide(
-              color: isLast ? Colors.transparent : const Color(0xff3b4652),
-            ),
-          ),
-        ),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            SizedBox(
-              width: 56,
-              child: Text(
-                "$line:",
-                textAlign: TextAlign.right,
-                style: const TextStyle(
-                  color: Color(0xffff5d63),
-                  fontSize: 12,
-                  fontFamily: "monospace",
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: SelectableText.rich(
-                TextSpan(
-                  children: _highlightTagSpans(text.toString(), tag, isHit),
-                ),
-              ),
-            ),
-            const SizedBox(width: 8),
-            IconButton(
-              tooltip: "打开源码",
-              icon: const Icon(Icons.code, size: 18, color: Color(0xff86efac)),
-              onPressed: text.toString().trim().isEmpty
-                  ? null
-                  : () {
-                      unawaited(_openSourceForLogLine(text.toString()));
-                    },
-              constraints: const BoxConstraints.tightFor(width: 28, height: 28),
-              padding: EdgeInsets.zero,
-              visualDensity: VisualDensity.compact,
-            ),
-            IconButton(
-              tooltip: "打开 Sublime",
-              icon: const Icon(
-                Icons.open_in_new,
-                size: 18,
-                color: Color(0xff7dd3fc),
-              ),
-              onPressed: file.trim().isEmpty || lineNo < 0
-                  ? null
-                  : () {
-                      unawaited(_openLogHitInSublime(file, lineNo));
-                    },
-              constraints: const BoxConstraints.tightFor(width: 28, height: 28),
-              padding: EdgeInsets.zero,
-              visualDensity: VisualDensity.compact,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  List<TextSpan> _highlightTagSpans(String text, String tag, bool isHit) {
-    final baseStyle = TextStyle(
-      color: isHit ? const Color(0xffd1fae5) : const Color(0xffd7e0ea),
-      fontSize: 12,
-      height: 1.35,
-      fontFamily: "monospace",
-    );
-
-    final query = tag.trim();
-
-    if (query.isEmpty) {
-      return [TextSpan(text: text, style: baseStyle)];
+    if (sublime is Map) {
+      return Map<String, dynamic>.from(sublime);
     }
 
-    final lowerText = text.toLowerCase();
-    final lowerQuery = query.toLowerCase();
-    final spans = <TextSpan>[];
-    var start = 0;
+    return {};
+  }
 
-    while (true) {
-      final index = lowerText.indexOf(lowerQuery, start);
+  String _entryHitText(ProcessLogEntry entry) {
+    final hit = _entrySublime(entry)["hit"];
 
-      if (index < 0) {
-        spans.add(TextSpan(text: text.substring(start), style: baseStyle));
-        break;
-      }
+    if (hit is Map) {
+      return (hit["text"] ?? "").toString();
+    }
 
-      if (index > start) {
-        spans.add(
-          TextSpan(text: text.substring(start, index), style: baseStyle),
+    return "";
+  }
+
+  Map<String, dynamic> _voiceContextForAnalysis(Map<String, dynamic> flow) {
+    final currentMs = flow["video_time_ms"] is num
+        ? (flow["video_time_ms"] as num).toDouble()
+        : _currentPosition.inMilliseconds.toDouble();
+    final currentSeconds = currentMs / 1000.0;
+
+    final nearbySubtitles = subtitles
+        .where((item) {
+          return item.end >= currentSeconds - 20 &&
+              item.start <= currentSeconds + 20;
+        })
+        .take(12)
+        .map((item) => item.toJson())
+        .toList();
+
+    return {
+      "bug_description": bugDescription,
+      "nearby_subtitles": nearbySubtitles,
+    };
+  }
+
+  Future<List<dynamic>> _ensureTagSummary(ProcessLogEntry entry) async {
+    final flow = entry.flow;
+    if (flow == null) return const [];
+
+    final currentSublime = flow["sublime"];
+    final sublime = currentSublime is Map
+        ? Map<String, dynamic>.from(currentSublime)
+        : <String, dynamic>{};
+    final cachedLines = sublime["current_file_tag_lines"];
+
+    if (cachedLines is List && cachedLines.isNotEmpty) {
+      return cachedLines;
+    }
+
+    final tag = (flow["tag"] ?? "").toString();
+    if (tag.trim().isEmpty) {
+      throw Exception("当前日志没有 Tag");
+    }
+
+    final summaryPayload = await processFiles(
+      targetTimestamp: (flow["timestamp"] ?? "").toString(),
+      zipPath: (flow["zip_path"] ?? zipPath ?? "").toString(),
+      zipInnerDir: (flow["zip_inner_dir"] ?? selectedZipDir ?? "").toString(),
+      tagKeyword: tag,
+      rangeMs: _defaultRangeMs,
+    );
+    final summaryResult = _decodeRustSearchResult(summaryPayload);
+    final tagLines = summaryResult["current_file_tag_lines"] is List
+        ? summaryResult["current_file_tag_lines"] as List
+        : const [];
+
+    if (summaryResult["success"] != true || tagLines.isEmpty) {
+      throw Exception(summaryResult["error"] ?? "当前日志没有对应 Tag 汇总结果");
+    }
+
+    flow["sublime"] = Map<String, dynamic>.from(summaryResult);
+    return tagLines;
+  }
+
+  Future<void> _jumpSource(ProcessLogEntry entry) async {
+    final logText = _entryHitText(entry);
+
+    if (logText.trim().isEmpty) {
+      trySetState(() {
+        _insertLog("跳转源码失败\n当前日志没有命中行");
+      });
+      return;
+    }
+
+    try {
+      final response = await http
+          .post(
+            Uri.parse("http://127.0.0.1:5000/open_source_hit"),
+            headers: const {"Content-Type": "application/json"},
+            body: jsonEncode({
+              "source_root": sourceDirController.text.trim(),
+              "text": logText,
+            }),
+          )
+          .timeout(const Duration(seconds: 10));
+
+      final data = _decodePythonJson(response, "/open_source_hit");
+
+      trySetState(() {
+        if (data["success"] == true) {
+          _insertLog(
+            "已跳转源码\n文件: ${data["file"] ?? ""}\n行号: ${data["line"] ?? ""}\n"
+            "类: ${data["class_name"] ?? ""}\n方法: ${data["method_name"] ?? ""}",
+          );
+        } else {
+          _insertLog("跳转源码失败\n${data["error"] ?? response.body}");
+        }
+      });
+    } catch (e) {
+      trySetState(() {
+        _insertLog("跳转源码失败\n$e");
+      });
+    }
+  }
+
+  Future<void> _analyzeWithChatGpt(ProcessLogEntry entry) async {
+    final flow = entry.flow;
+
+    if (flow == null) return;
+
+    trySetState(() {
+      _insertLog("ChatGPT 分析中...");
+    });
+
+    try {
+      await _ensureTagSummary(entry);
+      flow["source_root"] = sourceDirController.text.trim();
+      flow["voice"] = _voiceContextForAnalysis(flow);
+
+      final analysis = await _requestLogFlowAnalysis(flow);
+
+      trySetState(() {
+        _insertLog(
+          "ChatGPT 分析结果\n模型: ${analysis["model"] ?? ""}\n"
+          "${analysis["analysis"] ?? ""}",
         );
+      });
+    } catch (e) {
+      trySetState(() {
+        _insertLog("ChatGPT 分析失败\n$e");
+      });
+    }
+  }
+
+  Future<void> _summarizeTagTopTen(ProcessLogEntry entry) async {
+    final tag = entry.flow?["tag"]?.toString() ?? "";
+
+    trySetState(() {
+      _insertLog("Tag 汇总中...");
+    });
+
+    try {
+      final tagLines = await _ensureTagSummary(entry);
+
+      var text = "Tag 汇总\nTag: ${tag.trim().isEmpty ? "无" : tag}\n";
+      text += "对应前 10 条:\n";
+
+      for (final item in tagLines.take(10)) {
+        if (item is! Map) continue;
+        text += "${item["line"] ?? ""}: ${item["text"] ?? ""}\n";
       }
 
-      spans.add(
-        TextSpan(
-          text: text.substring(index, index + query.length),
-          style: baseStyle.copyWith(
-            color: const Color(0xffd8f3ff),
-            backgroundColor: const Color(0xff2b5a70),
-            fontWeight: FontWeight.w700,
-          ),
-        ),
-      );
-
-      start = index + query.length;
+      trySetState(() {
+        _insertLog(text.trimRight());
+      });
+    } catch (e) {
+      trySetState(() {
+        _insertLog("Tag 汇总失败\n$e");
+      });
     }
-
-    return spans;
   }
 
   Widget _buildLogCard() {
@@ -1745,7 +1388,8 @@ class _DropAreaState extends State<DropArea> {
     );
   }
 
-  Widget _logItem(int index, String text) {
+  Widget _logItem(int index, ProcessLogEntry entry) {
+    final text = entry.text;
     final success = text.contains("成功") || text.contains("找到");
     final color = success ? const Color(0xff4ade80) : const Color(0xff93c5fd);
 
@@ -1775,7 +1419,61 @@ class _DropAreaState extends State<DropArea> {
               ),
             ),
           ),
+          if (entry.hasActions) ...[
+            const SizedBox(width: 10),
+            _buildLogActions(entry),
+          ],
         ],
+      ),
+    );
+  }
+
+  Widget _buildLogActions(ProcessLogEntry entry) {
+    return SizedBox(
+      width: 112,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _logActionButton(
+            label: "跳转源码",
+            icon: Icons.code,
+            onPressed: () => unawaited(_jumpSource(entry)),
+          ),
+          const SizedBox(height: 8),
+          _logActionButton(
+            label: "ChatGPT分析",
+            icon: Icons.psychology_outlined,
+            onPressed: () => unawaited(_analyzeWithChatGpt(entry)),
+          ),
+          const SizedBox(height: 8),
+          _logActionButton(
+            label: "Tag汇总",
+            icon: Icons.sell_outlined,
+            onPressed: () => unawaited(_summarizeTagTopTen(entry)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _logActionButton({
+    required String label,
+    required IconData icon,
+    required VoidCallback onPressed,
+  }) {
+    return SizedBox(
+      height: 32,
+      child: OutlinedButton.icon(
+        onPressed: onPressed,
+        icon: Icon(icon, size: 14),
+        label: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis),
+        style: OutlinedButton.styleFrom(
+          foregroundColor: const Color(0xff86efac),
+          side: const BorderSide(color: Color(0xff2f5f73)),
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          textStyle: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+        ),
       ),
     );
   }
@@ -1799,8 +1497,7 @@ class _DropAreaState extends State<DropArea> {
             zipPath = path;
             zipDirs = [];
             selectedZipDir = null;
-            _lastLogFlow = null;
-            logs.insert(0, "检测到ZIP文件\n${fileName(path)}\n\n开始自动解压...");
+            _insertLog("检测到ZIP文件\n${fileName(path)}\n\n开始自动解压...");
           });
 
           await _loadZipDirs(path);
@@ -1816,7 +1513,7 @@ class _DropAreaState extends State<DropArea> {
           if (_disposed || !mounted) return;
 
           trySetState(() {
-            logs.insert(0, unzipResult);
+            _insertLog(unzipResult);
           });
         }
       }
@@ -1837,7 +1534,6 @@ class _DropAreaState extends State<DropArea> {
               selectedZipDir: selectedZipDir,
               tagController: tagController,
               isProcessing: _isProcessing,
-              hasLogFlow: _lastLogFlow != null,
               onZipDirChanged: (value) {
                 trySetState(() {
                   selectedZipDir = value;
@@ -1846,9 +1542,6 @@ class _DropAreaState extends State<DropArea> {
               onStart: null,
               onPickSourceDir: () {
                 unawaited(_pickSourceDirectory());
-              },
-              onShowLogFlow: () {
-                unawaited(_showLogFlowDialog());
               },
               onReset: _resetConditions,
             ),
