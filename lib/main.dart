@@ -429,36 +429,43 @@ class _DropAreaState extends State<DropArea> {
       }
 
       final dirs = <String>{};
+      final mainLogDirs = <String>{};
 
       await for (final entity in root.list(
         recursive: true,
         followLinks: false,
       )) {
-        if (entity is! File) continue;
-
-        final name = entity.uri.pathSegments.isEmpty
-            ? ""
-            : entity.uri.pathSegments.last.toLowerCase();
-
-        if (!name.startsWith("main_log")) continue;
-
         final parent = entity.parent.path;
-        final relative = parent.startsWith(extractDir)
-            ? parent
+        final targetPath = entity is Directory ? entity.path : parent;
+        final relative = targetPath.startsWith(extractDir)
+            ? targetPath
                   .substring(extractDir.length)
                   .replaceFirst(RegExp(r"^/+"), "")
-            : parent;
+            : targetPath;
 
         if (relative.trim().isNotEmpty) {
           dirs.add(relative);
         }
+
+        if (entity is File) {
+          final name = entity.uri.pathSegments.isEmpty
+              ? ""
+              : entity.uri.pathSegments.last.toLowerCase();
+
+          if (name.startsWith("main_log") && relative.trim().isNotEmpty) {
+            mainLogDirs.add(relative);
+          }
+        }
       }
 
       final list = dirs.toList()..sort();
+      final selected = mainLogDirs.isNotEmpty
+          ? (mainLogDirs.toList()..sort()).first
+          : (list.isNotEmpty ? list.first : null);
 
       trySetState(() {
         zipDirs = list;
-        selectedZipDir = list.isNotEmpty ? list.first : null;
+        selectedZipDir = selected;
       });
     } catch (_) {
       trySetState(() {
