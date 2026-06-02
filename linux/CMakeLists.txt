@@ -27,10 +27,10 @@ project(runner LANGUAGES CXX)
 
 # The name of the executable created for the application. Change this to change
 # the on-disk name of your application.
-set(BINARY_NAME "debugvideoagent")
+set(BINARY_NAME "LogAgent")
 
 # The unique GTK application identifier for this application.
-set(APPLICATION_ID "com.q.agent.debugvideoagent")
+set(APPLICATION_ID "com.q.agent.logagent")
 
 # Explicitly opt in to modern CMake behaviors to avoid warnings with recent
 # versions of CMake.

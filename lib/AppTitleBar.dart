@@ -6,7 +6,6 @@ class AppTitleBar extends StatelessWidget {
   final TextEditingController sourceDirController;
   final String? selectedZipDir;
   final TextEditingController tagController;
-  final TextEditingController rangeController;
   final bool isProcessing;
   final bool hasLogFlow;
   final ValueChanged<String?> onZipDirChanged;
@@ -21,7 +20,6 @@ class AppTitleBar extends StatelessWidget {
     required this.sourceDirController,
     required this.selectedZipDir,
     required this.tagController,
-    required this.rangeController,
     required this.isProcessing,
     required this.hasLogFlow,
     required this.onZipDirChanged,
@@ -112,7 +110,7 @@ class AppTitleBar extends StatelessWidget {
           child: Row(
             children: [
               SizedBox(
-                width: 178,
+                width: 154,
                 child: MoveWindow(
                   child: Row(
                     children: const [
@@ -123,7 +121,7 @@ class AppTitleBar extends StatelessWidget {
                       ),
                       SizedBox(width: 7),
                       Text(
-                        "debugvideoagent",
+                        "LogAgent",
                         style: TextStyle(
                           color: Colors.white,
                           fontWeight: FontWeight.w700,
@@ -140,7 +138,7 @@ class AppTitleBar extends StatelessWidget {
                   child: Row(
                     children: [
                       SizedBox(
-                        width: 360,
+                        width: 270,
                         child: Container(
                           height: 36,
                           padding: const EdgeInsets.all(3),
@@ -196,7 +194,7 @@ class AppTitleBar extends StatelessWidget {
                       ),
                       const SizedBox(width: 8),
                       SizedBox(
-                        width: 300,
+                        width: 260,
                         child: Container(
                           height: 38,
                           padding: const EdgeInsets.symmetric(horizontal: 8),
@@ -256,7 +254,7 @@ class AppTitleBar extends StatelessWidget {
                       ),
                       const SizedBox(width: 8),
                       SizedBox(
-                        width: 150,
+                        width: 132,
                         child: TextField(
                           controller: tagController,
                           style: const TextStyle(
@@ -270,28 +268,6 @@ class AppTitleBar extends StatelessWidget {
                               size: 16,
                               color: Colors.white54,
                             ),
-                            verticalPadding: 8,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      SizedBox(
-                        width: 84,
-                        child: TextField(
-                          controller: rangeController,
-                          keyboardType: TextInputType.number,
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 12,
-                          ),
-                          decoration: _fieldDecoration(
-                            hintText: "±ms",
-                            prefixIcon: const Icon(
-                              Icons.timelapse_outlined,
-                              size: 16,
-                              color: Colors.white54,
-                            ),
-                            horizontalPadding: 8,
                             verticalPadding: 8,
                           ),
                         ),
@@ -339,33 +315,41 @@ class AppTitleBar extends StatelessWidget {
                   ),
                 ),
               ),
-              const SizedBox(width: 8),
-              WindowButton(
-                colors: WindowButtonColors(
-                  iconNormal: Colors.white54,
-                  mouseOver: const Color(0xff24344a),
-                  mouseDown: const Color(0xff30445f),
+              const SizedBox(width: 6),
+              SizedBox(
+                width: 114,
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    WindowButton(
+                      colors: WindowButtonColors(
+                        iconNormal: Colors.white54,
+                        mouseOver: const Color(0xff24344a),
+                        mouseDown: const Color(0xff30445f),
+                      ),
+                      icon: Icons.remove,
+                      onPressed: () => appWindow.minimize(),
+                    ),
+                    WindowButton(
+                      colors: WindowButtonColors(
+                        iconNormal: Colors.white54,
+                        mouseOver: const Color(0xff24344a),
+                        mouseDown: const Color(0xff30445f),
+                      ),
+                      icon: Icons.crop_square,
+                      onPressed: () => appWindow.maximizeOrRestore(),
+                    ),
+                    WindowButton(
+                      colors: WindowButtonColors(
+                        iconNormal: Colors.white54,
+                        mouseOver: const Color(0xffda3b3b),
+                        mouseDown: const Color(0xffbf2f2f),
+                      ),
+                      icon: Icons.close,
+                      onPressed: () => appWindow.close(),
+                    ),
+                  ],
                 ),
-                icon: Icons.remove,
-                onPressed: () => appWindow.minimize(),
-              ),
-              WindowButton(
-                colors: WindowButtonColors(
-                  iconNormal: Colors.white54,
-                  mouseOver: const Color(0xff24344a),
-                  mouseDown: const Color(0xff30445f),
-                ),
-                icon: Icons.crop_square,
-                onPressed: () => appWindow.maximizeOrRestore(),
-              ),
-              WindowButton(
-                colors: WindowButtonColors(
-                  iconNormal: Colors.white54,
-                  mouseOver: const Color(0xffda3b3b),
-                  mouseDown: const Color(0xffbf2f2f),
-                ),
-                icon: Icons.close,
-                onPressed: () => appWindow.close(),
               ),
             ],
           ),
@@ -394,8 +378,8 @@ class WindowButton extends StatelessWidget {
       child: GestureDetector(
         onTap: onPressed,
         child: Container(
-          width: 42,
-          height: 42,
+          width: 36,
+          height: 38,
           color: Colors.transparent,
           child: Center(child: Icon(icon, color: colors.iconNormal, size: 18)),
         ),

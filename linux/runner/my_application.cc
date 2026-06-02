@@ -26,7 +26,7 @@ static void my_application_activate(GApplication* application) {
  GtkWindow* window =
     GTK_WINDOW(gtk_application_window_new(GTK_APPLICATION(application)));
 
-gtk_window_set_title(window, "Log Agent");
+gtk_window_set_title(window, "LogAgent");
 
 gtk_window_set_default_size(window, 1600, 920);
 
@@ -115,7 +115,7 @@ static void my_application_class_init(MyApplicationClass* klass) {
 static void my_application_init(MyApplication* self) {}
 
 MyApplication* my_application_new() {
-  g_set_prgname(APPLICATION_ID);
+  g_set_prgname("LogAgent");
 
   return MY_APPLICATION(
       g_object_new(

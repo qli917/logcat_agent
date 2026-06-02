@@ -90,12 +90,12 @@ BEGIN
         BLOCK "040904e4"
         BEGIN
             VALUE "CompanyName", "com.q.agent" "\0"
-            VALUE "FileDescription", "debugvideoagent" "\0"
+            VALUE "FileDescription", "LogAgent" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
-            VALUE "InternalName", "debugvideoagent" "\0"
+            VALUE "InternalName", "LogAgent" "\0"
             VALUE "LegalCopyright", "Copyright (C) 2026 com.q.agent. All rights reserved." "\0"
-            VALUE "OriginalFilename", "debugvideoagent.exe" "\0"
-            VALUE "ProductName", "debugvideoagent" "\0"
+            VALUE "OriginalFilename", "LogAgent.exe" "\0"
+            VALUE "ProductName", "LogAgent" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END

@@ -35,7 +35,7 @@ void main() async {
     appWindow.minSize = const Size(1300, 800);
     appWindow.size = const Size(1600, 920);
     appWindow.alignment = Alignment.center;
-    appWindow.title = "debugvideoagent";
+    appWindow.title = "LogAgent";
     appWindow.show();
   });
 }
@@ -47,7 +47,7 @@ class MyApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      title: 'debugvideoagent',
+      title: 'LogAgent',
       theme: ThemeData(
         useMaterial3: true,
         brightness: Brightness.dark,
@@ -95,6 +95,7 @@ class DropArea extends StatefulWidget {
 class _DropAreaState extends State<DropArea> {
   static const _tagKeywordCacheKey = "tag_keyword";
   static const _sourceDirCacheKey = "source_dir";
+  static const int _defaultRangeMs = 100;
 
   late final Player player = Player();
 
@@ -115,7 +116,6 @@ class _DropAreaState extends State<DropArea> {
     text: Directory.current.path,
   );
   final tagController = TextEditingController();
-  final rangeController = TextEditingController(text: "500");
 
   List<String> logs = [];
   List<SubtitleSegment> subtitles = [];
@@ -188,7 +188,6 @@ class _DropAreaState extends State<DropArea> {
     tagController.removeListener(_saveTagKeyword);
     sourceDirController.dispose();
     tagController.dispose();
-    rangeController.dispose();
 
     try {
       stopPythonEngine();
@@ -385,6 +384,59 @@ class _DropAreaState extends State<DropArea> {
           for (int i = 1; i < parts.length; i++) {
             dirs.add(parts.sublist(0, i).join('/'));
           }
+        }
+      }
+
+      final list = dirs.toList()..sort();
+
+      trySetState(() {
+        zipDirs = list;
+        selectedZipDir = list.isNotEmpty ? list.first : null;
+      });
+    } catch (_) {
+      trySetState(() {
+        zipDirs = [];
+        selectedZipDir = null;
+      });
+    }
+  }
+
+  Future<void> _loadExtractedLogDirs() async {
+    try {
+      final extractDir = await getExtractDir();
+      final root = Directory(extractDir);
+
+      if (!root.existsSync()) {
+        trySetState(() {
+          zipDirs = [];
+          selectedZipDir = null;
+        });
+        return;
+      }
+
+      final dirs = <String>{};
+
+      await for (final entity in root.list(
+        recursive: true,
+        followLinks: false,
+      )) {
+        if (entity is! File) continue;
+
+        final name = entity.uri.pathSegments.isEmpty
+            ? ""
+            : entity.uri.pathSegments.last.toLowerCase();
+
+        if (!name.startsWith("main_log")) continue;
+
+        final parent = entity.parent.path;
+        final relative = parent.startsWith(extractDir)
+            ? parent
+                  .substring(extractDir.length)
+                  .replaceFirst(RegExp(r"^/+"), "")
+            : parent;
+
+        if (relative.trim().isNotEmpty) {
+          dirs.add(relative);
         }
       }
 
@@ -626,7 +678,7 @@ class _DropAreaState extends State<DropArea> {
     log += "ZIP目录: ${selectedZipDir ?? "未选择"}\n";
     log +=
         "Tag: ${tagController.text.trim().isEmpty ? "无" : tagController.text.trim()}\n";
-    log += "范围: ±${rangeController.text}ms\n\n";
+    log += "范围: ±${_defaultRangeMs}ms\n\n";
 
     try {
       log += "[1/2] Python OCR 识别视频时间戳中...\n";
@@ -1179,7 +1231,7 @@ class _DropAreaState extends State<DropArea> {
         zipPath: zipPath ?? "",
         zipInnerDir: selectedZipDir ?? "",
         tagKeyword: tag,
-        rangeMs: int.tryParse(rangeController.text.trim()) ?? 0,
+        rangeMs: _defaultRangeMs,
       );
 
       final decoded = _decodeRustSearchResult(result);
@@ -1759,6 +1811,10 @@ class _DropAreaState extends State<DropArea> {
 
           if (_disposed || !mounted) return;
 
+          await _loadExtractedLogDirs();
+
+          if (_disposed || !mounted) return;
+
           trySetState(() {
             logs.insert(0, unzipResult);
           });
@@ -1780,7 +1836,6 @@ class _DropAreaState extends State<DropArea> {
               sourceDirController: sourceDirController,
               selectedZipDir: selectedZipDir,
               tagController: tagController,
-              rangeController: rangeController,
               isProcessing: _isProcessing,
               hasLogFlow: _lastLogFlow != null,
               onZipDirChanged: (value) {

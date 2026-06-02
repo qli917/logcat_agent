@@ -36,7 +36,7 @@ DEFAULT_WHISPER_MODEL_PATH = os.path.join(BASE_DIR, "models", "faster-whisper-sm
 DEBUG_ROOT = os.path.join(BASE_DIR, "debug_ocr")
 DEFAULT_EXTRACT_DIR = os.path.join(PROJECT_ROOT, "log_hunter_extracted")
 SUBTITLE_ROOT = os.path.join(PROJECT_ROOT, "log_hunter_subtitles")
-IDE_CACHE_PATH = os.path.join(PROJECT_ROOT, ".debugvideoagent_ide.json")
+IDE_CACHE_PATH = os.path.join(PROJECT_ROOT, ".logagent_ide.json")
 
 os.makedirs(DEBUG_ROOT, exist_ok=True)
 os.makedirs(SUBTITLE_ROOT, exist_ok=True)
