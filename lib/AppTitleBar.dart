@@ -189,59 +189,62 @@ class AppTitleBar extends StatelessWidget {
                       const SizedBox(width: 8),
                       SizedBox(
                         width: 260,
-                        child: Container(
-                          height: 38,
-                          padding: const EdgeInsets.symmetric(horizontal: 8),
-                          decoration: _fieldBoxDecoration(),
-                          child: DropdownButtonHideUnderline(
-                            child: DropdownButton<String>(
-                              value: zipDirs.contains(selectedZipDir)
-                                  ? selectedZipDir
-                                  : null,
-                              isExpanded: true,
-                              icon: const Icon(
-                                Icons.expand_more,
-                                color: Colors.white54,
-                              ),
-                              dropdownColor: const Color(0xff101c2b),
-                              hint: Row(
-                                children: const [
-                                  Icon(
-                                    Icons.folder_zip_outlined,
-                                    size: 16,
-                                    color: Colors.white54,
-                                  ),
-                                  SizedBox(width: 8),
-                                  Expanded(
-                                    child: Text(
-                                      "拖入 ZIP 后自动读取目录",
-                                      overflow: TextOverflow.ellipsis,
-                                      style: TextStyle(
-                                        fontSize: 12,
-                                        color: Colors.white38,
-                                      ),
+                        child: PopupMenuButton<String>(
+                          enabled: zipDirs.isNotEmpty,
+                          tooltip: "选择 ZIP 日志目录",
+                          color: const Color(0xff101c2b),
+                          constraints: const BoxConstraints(
+                            minWidth: 260,
+                            maxWidth: 520,
+                          ),
+                          position: PopupMenuPosition.under,
+                          onSelected: onZipDirChanged,
+                          itemBuilder: (context) => zipDirs
+                              .map(
+                                (dir) => PopupMenuItem<String>(
+                                  value: dir,
+                                  child: Text(
+                                    dir,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      fontSize: 12,
+                                      color: Colors.white70,
                                     ),
                                   ),
-                                ],
-                              ),
-                              items: zipDirs
-                                  .map(
-                                    (dir) => DropdownMenuItem(
-                                      value: dir,
-                                      child: Text(
-                                        dir,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: const TextStyle(
-                                          fontSize: 12,
-                                          color: Colors.white70,
-                                        ),
-                                      ),
+                                ),
+                              )
+                              .toList(),
+                          child: Container(
+                            height: 38,
+                            padding: const EdgeInsets.symmetric(horizontal: 10),
+                            decoration: _fieldBoxDecoration(),
+                            child: Row(
+                              children: [
+                                const Icon(
+                                  Icons.folder_zip_outlined,
+                                  size: 16,
+                                  color: Colors.white54,
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    zipDirs.contains(selectedZipDir)
+                                        ? selectedZipDir!
+                                        : "拖入 ZIP 后自动读取目录",
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: zipDirs.contains(selectedZipDir)
+                                          ? Colors.white70
+                                          : Colors.white38,
                                     ),
-                                  )
-                                  .toList(),
-                              onChanged: zipDirs.isEmpty
-                                  ? null
-                                  : onZipDirChanged,
+                                  ),
+                                ),
+                                const Icon(
+                                  Icons.expand_more,
+                                  color: Colors.white54,
+                                ),
+                              ],
                             ),
                           ),
                         ),

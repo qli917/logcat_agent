@@ -1419,60 +1419,93 @@ class _DropAreaState extends State<DropArea> {
               ),
             ),
           ),
-          if (entry.hasActions) ...[
-            const SizedBox(width: 10),
-            _buildLogActions(entry),
-          ],
+          if (entry.hasActions) _buildLogActions(entry),
         ],
       ),
     );
   }
 
   Widget _buildLogActions(ProcessLogEntry entry) {
-    return SizedBox(
-      width: 112,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          _logActionButton(
-            label: "跳转源码",
-            icon: Icons.code,
-            onPressed: () => unawaited(_jumpSource(entry)),
+    var expanded = false;
+
+    return StatefulBuilder(
+      builder: (context, setLocalState) {
+        return MouseRegion(
+          onEnter: (_) {
+            setLocalState(() {
+              expanded = true;
+            });
+          },
+          onExit: (_) {
+            setLocalState(() {
+              expanded = false;
+            });
+          },
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 180),
+            curve: Curves.easeOutCubic,
+            width: expanded ? 112 : 38,
+            margin: const EdgeInsets.only(left: 8),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _logActionButton(
+                  label: "跳转源码",
+                  icon: Icons.code,
+                  expanded: expanded,
+                  onPressed: () => unawaited(_jumpSource(entry)),
+                ),
+                const SizedBox(height: 8),
+                _logActionButton(
+                  label: "ChatGPT分析",
+                  icon: Icons.psychology_outlined,
+                  expanded: expanded,
+                  onPressed: () => unawaited(_analyzeWithChatGpt(entry)),
+                ),
+                const SizedBox(height: 8),
+                _logActionButton(
+                  label: "Tag汇总",
+                  icon: Icons.sell_outlined,
+                  expanded: expanded,
+                  onPressed: () => unawaited(_summarizeTagTopTen(entry)),
+                ),
+              ],
+            ),
           ),
-          const SizedBox(height: 8),
-          _logActionButton(
-            label: "ChatGPT分析",
-            icon: Icons.psychology_outlined,
-            onPressed: () => unawaited(_analyzeWithChatGpt(entry)),
-          ),
-          const SizedBox(height: 8),
-          _logActionButton(
-            label: "Tag汇总",
-            icon: Icons.sell_outlined,
-            onPressed: () => unawaited(_summarizeTagTopTen(entry)),
-          ),
-        ],
-      ),
+        );
+      },
     );
   }
 
   Widget _logActionButton({
     required String label,
     required IconData icon,
+    required bool expanded,
     required VoidCallback onPressed,
   }) {
     return SizedBox(
       height: 32,
-      child: OutlinedButton.icon(
-        onPressed: onPressed,
-        icon: Icon(icon, size: 14),
-        label: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis),
-        style: OutlinedButton.styleFrom(
-          foregroundColor: const Color(0xff86efac),
-          side: const BorderSide(color: Color(0xff2f5f73)),
-          padding: const EdgeInsets.symmetric(horizontal: 8),
-          textStyle: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+      child: Tooltip(
+        message: label,
+        waitDuration: const Duration(milliseconds: 500),
+        child: OutlinedButton.icon(
+          onPressed: onPressed,
+          icon: Icon(icon, size: 14),
+          label: expanded
+              ? Text(label, maxLines: 1, overflow: TextOverflow.ellipsis)
+              : const SizedBox.shrink(),
+          style: OutlinedButton.styleFrom(
+            foregroundColor: const Color(0xff86efac),
+            side: const BorderSide(color: Color(0xff2f5f73)),
+            padding: EdgeInsets.symmetric(horizontal: expanded ? 8 : 0),
+            textStyle: const TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+            ),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(6),
+            ),
+          ),
         ),
       ),
     );
