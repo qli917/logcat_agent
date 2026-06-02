@@ -8,6 +8,7 @@ import 'package:debugvideoagent/AppTitleBar.dart';
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
@@ -1211,6 +1212,126 @@ class _DropAreaState extends State<DropArea> {
     };
   }
 
+  String _formatFeishuMessage(ProcessLogEntry entry) {
+    final flow = entry.flow ?? {};
+    final buffer = StringBuffer()
+      ..writeln("LogAgent 处理日志")
+      ..writeln(
+        "视频: ${fileName((flow["video_path"] ?? videoPath)?.toString())}",
+      )
+      ..writeln("ZIP: ${fileName((flow["zip_path"] ?? zipPath)?.toString())}")
+      ..writeln(
+        "日志目录: ${(flow["log_dir"] ?? flow["zip_inner_dir"] ?? selectedZipDir ?? "").toString()}",
+      )
+      ..writeln("时间戳: ${(flow["timestamp"] ?? "").toString()}")
+      ..writeln("Tag: ${(flow["tag"] ?? "").toString()}")
+      ..writeln("范围: ±$_defaultRangeMs ms");
+
+    final description = bugDescription.trim();
+    if (description.isNotEmpty) {
+      buffer.writeln();
+      buffer.writeln("问题描述:");
+      buffer.writeln(description);
+    }
+
+    final hitText = _entryHitText(entry).trim();
+    if (hitText.isNotEmpty) {
+      buffer.writeln();
+      buffer.writeln("命中日志:");
+      buffer.writeln(hitText);
+    }
+
+    final voice = _voiceContextForAnalysis(flow);
+    final nearbySubtitles = voice["nearby_subtitles"];
+    if (nearbySubtitles is List && nearbySubtitles.isNotEmpty) {
+      buffer.writeln();
+      buffer.writeln("附近字幕:");
+      for (final item in nearbySubtitles.take(5)) {
+        if (item is! Map) continue;
+        final start = (item["start"] as num?)?.toDouble() ?? 0;
+        final text = (item["text"] ?? "").toString().trim();
+        if (text.isEmpty) continue;
+        buffer.writeln("${start.toStringAsFixed(1)}s: $text");
+      }
+    }
+
+    buffer.writeln();
+    buffer.writeln("原始输出:");
+    buffer.writeln(entry.text.trim());
+
+    final message = buffer.toString().trim();
+    const maxLength = 3900;
+    if (message.length <= maxLength) return message;
+
+    return "${message.substring(0, maxLength)}\n...(已截断)";
+  }
+
+  Future<void> _sendToFeishu(ProcessLogEntry entry) async {
+    try {
+      final message = _formatFeishuMessage(entry);
+      await Clipboard.setData(ClipboardData(text: message));
+      await _openFeishu();
+
+      trySetState(() {
+        _insertLog("已复制日志到剪贴板\n请在飞书中选择联系人后粘贴发送");
+      });
+    } catch (e) {
+      trySetState(() {
+        _insertLog("打开飞书失败\n日志已尝试复制到剪贴板\n$e");
+      });
+    }
+  }
+
+  Future<void> _openFeishu() async {
+    const clientUrl =
+        "feishu://applink.feishu.cn/client/web_url/open?url=https%3A%2F%2Fwww.feishu.cn%2Fmessages";
+    const feishuUrl = "https://www.feishu.cn/messages";
+
+    if (Platform.isLinux && await _openLinuxFeishuClient()) return;
+    if (await _openExternalUrl(clientUrl)) return;
+    await _openExternalUrl(feishuUrl);
+  }
+
+  Future<bool> _openLinuxFeishuClient() async {
+    const commands = [
+      ["gtk-launch", "bytedance-feishu"],
+      ["/usr/bin/bytedance-feishu-stable"],
+      ["bytedance-feishu-stable"],
+    ];
+
+    for (final command in commands) {
+      try {
+        final result = await Process.run(
+          command.first,
+          command.skip(1).toList(),
+        );
+        if (result.exitCode == 0) return true;
+      } catch (_) {}
+    }
+
+    return false;
+  }
+
+  Future<bool> _openExternalUrl(String url) async {
+    try {
+      ProcessResult result;
+
+      if (Platform.isLinux) {
+        result = await Process.run("xdg-open", [url]);
+      } else if (Platform.isMacOS) {
+        result = await Process.run("open", [url]);
+      } else if (Platform.isWindows) {
+        result = await Process.run("cmd", ["/c", "start", "", url]);
+      } else {
+        return false;
+      }
+
+      return result.exitCode == 0;
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<List<dynamic>> _ensureTagSummary(ProcessLogEntry entry) async {
     final flow = entry.flow;
     if (flow == null) return const [];
@@ -1451,7 +1572,7 @@ class _DropAreaState extends State<DropArea> {
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 180),
             curve: Curves.easeOutCubic,
-            width: expanded ? 112 : 38,
+            width: expanded ? 118 : 38,
             margin: const EdgeInsets.only(left: 8),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1475,6 +1596,13 @@ class _DropAreaState extends State<DropArea> {
                   icon: Icons.sell_outlined,
                   expanded: expanded,
                   onPressed: () => unawaited(_summarizeTagTopTen(entry)),
+                ),
+                const SizedBox(height: 8),
+                _logActionButton(
+                  label: "复制飞书",
+                  icon: Icons.send_outlined,
+                  expanded: expanded,
+                  onPressed: () => unawaited(_sendToFeishu(entry)),
                 ),
               ],
             ),

@@ -2,7 +2,6 @@ import os
 import sys
 import re
 import cv2
-import torch
 import logging
 import numpy as np
 import subprocess
@@ -10,6 +9,10 @@ import json
 import shutil
 import glob
 import requests
+import zipfile
+import tarfile
+import tempfile
+import importlib
 from flask import Flask, request, jsonify
 from datetime import datetime
 from collections import Counter
@@ -26,14 +29,26 @@ logger = logging.getLogger(__name__)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(BASE_DIR)
+MODEL_DATA_DIR = os.environ.get(
+    "LOGCAT_AGENT_MODEL_DIR",
+    os.path.join(os.path.expanduser("~"), ".local", "share", "logagent", "models"),
+)
 
 MODEL_PATH = os.path.join(BASE_DIR, "timestamp_crnn_best.pt")
+DOWNLOADED_MODEL_PATH = os.path.join(MODEL_DATA_DIR, "timestamp_crnn_best.pt")
+ONNX_MODEL_PATH = os.path.join(BASE_DIR, "timestamp_crnn_best.onnx")
+DOWNLOADED_ONNX_MODEL_PATH = os.path.join(MODEL_DATA_DIR, "timestamp_crnn_best.onnx")
 DEFAULT_WHISPER_TURBO_MODEL_PATH = os.path.join(
     BASE_DIR,
     "models",
     "faster-whisper-large-v3-turbo",
 )
 DEFAULT_WHISPER_MODEL_PATH = os.path.join(BASE_DIR, "models", "faster-whisper-small")
+DOWNLOADED_WHISPER_TURBO_MODEL_PATH = os.path.join(
+    MODEL_DATA_DIR,
+    "faster-whisper-large-v3-turbo",
+)
+DOWNLOADED_WHISPER_MODEL_PATH = os.path.join(MODEL_DATA_DIR, "faster-whisper-small")
 DEBUG_ROOT = os.path.join(BASE_DIR, "debug_ocr")
 DEFAULT_EXTRACT_DIR = os.path.join(PROJECT_ROOT, "log_hunter_extracted")
 SUBTITLE_ROOT = os.path.join(PROJECT_ROOT, "log_hunter_subtitles")
@@ -45,81 +60,271 @@ OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "").strip()
 
 os.makedirs(DEBUG_ROOT, exist_ok=True)
 os.makedirs(SUBTITLE_ROOT, exist_ok=True)
+os.makedirs(MODEL_DATA_DIR, exist_ok=True)
 
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+DEVICE = "cpu"
+DEFAULT_ALPHABET = "0123456789-: "
+DEFAULT_IMG_H = 64
+DEFAULT_IMG_W = 512
 
 
-class CRNN(torch.nn.Module):
-    def __init__(self, num_classes):
-        super().__init__()
+def download_file(url, target_path):
+    os.makedirs(os.path.dirname(target_path), exist_ok=True)
+    temp_path = target_path + ".download"
 
-        self.cnn = torch.nn.Sequential(
-            torch.nn.Conv2d(1, 64, 3, 1, 1),
-            torch.nn.BatchNorm2d(64),
-            torch.nn.ReLU(True),
-            torch.nn.MaxPool2d(2, 2),
+    logger.info("开始下载模型: %s", url)
 
-            torch.nn.Conv2d(64, 128, 3, 1, 1),
-            torch.nn.BatchNorm2d(128),
-            torch.nn.ReLU(True),
-            torch.nn.MaxPool2d(2, 2),
+    with requests.get(url, stream=True, timeout=(10, 60)) as response:
+        response.raise_for_status()
+        with open(temp_path, "wb") as f:
+            for chunk in response.iter_content(chunk_size=1024 * 1024):
+                if chunk:
+                    f.write(chunk)
 
-            torch.nn.Conv2d(128, 256, 3, 1, 1),
-            torch.nn.BatchNorm2d(256),
-            torch.nn.ReLU(True),
+    os.replace(temp_path, target_path)
+    logger.info("模型下载完成: %s", target_path)
 
-            torch.nn.Conv2d(256, 256, 3, 1, 1),
-            torch.nn.BatchNorm2d(256),
-            torch.nn.ReLU(True),
-            torch.nn.MaxPool2d((2, 1), (2, 1)),
 
-            torch.nn.Conv2d(256, 512, 3, 1, 1),
-            torch.nn.BatchNorm2d(512),
-            torch.nn.ReLU(True),
+def ensure_file_from_url(target_path, url_env_name):
+    if os.path.exists(target_path):
+        return target_path
 
-            torch.nn.Conv2d(512, 512, 3, 1, 1),
-            torch.nn.BatchNorm2d(512),
-            torch.nn.ReLU(True),
-            torch.nn.MaxPool2d((2, 1), (2, 1)),
+    url = os.environ.get(url_env_name, "").strip()
+    if not url:
+        raise FileNotFoundError(
+            f"找不到模型文件: {target_path}。请设置环境变量 {url_env_name} 后重启应用。"
         )
 
-        self.rnn = torch.nn.LSTM(
-            input_size=512 * 4,
-            hidden_size=256,
-            num_layers=2,
-            bidirectional=True,
-            batch_first=False,
+    download_file(url, target_path)
+    return target_path
+
+
+def ensure_optional_file_from_url(target_path, url_env_name):
+    if os.path.exists(target_path):
+        return target_path
+
+    url = os.environ.get(url_env_name, "").strip()
+    if not url:
+        return ""
+
+    download_file(url, target_path)
+    return target_path
+
+
+def has_whisper_model_files(model_dir):
+    required = ["model.bin", "config.json"]
+    return all(os.path.isfile(os.path.join(model_dir, item)) for item in required)
+
+
+def move_extracted_model_files(extract_dir, target_dir):
+    if has_whisper_model_files(extract_dir):
+        source_dir = extract_dir
+    else:
+        source_dir = ""
+        for current_root, _, _ in os.walk(extract_dir):
+            if has_whisper_model_files(current_root):
+                source_dir = current_root
+                break
+
+        if not source_dir:
+            raise FileNotFoundError("下载的 Whisper 模型压缩包内缺少 model.bin/config.json")
+
+    if os.path.isdir(target_dir):
+        shutil.rmtree(target_dir)
+
+    os.makedirs(os.path.dirname(target_dir), exist_ok=True)
+    shutil.move(source_dir, target_dir)
+
+
+def extract_model_archive(archive_path, target_dir):
+    with tempfile.TemporaryDirectory(prefix="logagent_model_") as temp_dir:
+        if zipfile.is_zipfile(archive_path):
+            with zipfile.ZipFile(archive_path) as archive:
+                archive.extractall(temp_dir)
+        elif tarfile.is_tarfile(archive_path):
+            with tarfile.open(archive_path) as archive:
+                archive.extractall(temp_dir)
+        else:
+            raise ValueError("模型压缩包必须是 zip、tar 或 tar.gz 格式")
+
+        move_extracted_model_files(temp_dir, target_dir)
+
+
+def ensure_whisper_model_archive(target_dir, url_env_name):
+    if has_whisper_model_files(target_dir):
+        return target_dir
+
+    url = os.environ.get(url_env_name, "").strip()
+    if not url:
+        return ""
+
+    os.makedirs(MODEL_DATA_DIR, exist_ok=True)
+    archive_name = os.path.basename(url.split("?", 1)[0]) or f"{os.path.basename(target_dir)}.zip"
+    archive_path = os.path.join(MODEL_DATA_DIR, archive_name)
+    download_file(url, archive_path)
+    extract_model_archive(archive_path, target_dir)
+
+    try:
+        os.remove(archive_path)
+    except OSError:
+        pass
+
+    return target_dir
+
+
+class OcrRuntime:
+    def __init__(self, backend, model_path, alphabet, img_h, img_w, session=None, torch_model=None, torch_module=None):
+        self.backend = backend
+        self.model_path = model_path
+        self.alphabet = alphabet
+        self.img_h = int(img_h)
+        self.img_w = int(img_w)
+        self.session = session
+        self.torch_model = torch_model
+        self.torch = torch_module
+        self.input_name = session.get_inputs()[0].name if session else ""
+        self.output_name = session.get_outputs()[0].name if session else ""
+
+    def predict(self, input_array):
+        if self.backend == "onnx":
+            return self.session.run([self.output_name], {self.input_name: input_array})[0]
+
+        tensor = self.torch.from_numpy(input_array).to(DEVICE)
+        with self.torch.no_grad():
+            return self.torch_model(tensor).detach().cpu().numpy()
+
+
+def build_torch_crnn(torch_module, num_classes):
+    class TorchCrnn(torch_module.nn.Module):
+        def __init__(self):
+            super().__init__()
+
+            self.cnn = torch_module.nn.Sequential(
+                torch_module.nn.Conv2d(1, 64, 3, 1, 1),
+                torch_module.nn.BatchNorm2d(64),
+                torch_module.nn.ReLU(True),
+                torch_module.nn.MaxPool2d(2, 2),
+
+                torch_module.nn.Conv2d(64, 128, 3, 1, 1),
+                torch_module.nn.BatchNorm2d(128),
+                torch_module.nn.ReLU(True),
+                torch_module.nn.MaxPool2d(2, 2),
+
+                torch_module.nn.Conv2d(128, 256, 3, 1, 1),
+                torch_module.nn.BatchNorm2d(256),
+                torch_module.nn.ReLU(True),
+
+                torch_module.nn.Conv2d(256, 256, 3, 1, 1),
+                torch_module.nn.BatchNorm2d(256),
+                torch_module.nn.ReLU(True),
+                torch_module.nn.MaxPool2d((2, 1), (2, 1)),
+
+                torch_module.nn.Conv2d(256, 512, 3, 1, 1),
+                torch_module.nn.BatchNorm2d(512),
+                torch_module.nn.ReLU(True),
+
+                torch_module.nn.Conv2d(512, 512, 3, 1, 1),
+                torch_module.nn.BatchNorm2d(512),
+                torch_module.nn.ReLU(True),
+                torch_module.nn.MaxPool2d((2, 1), (2, 1)),
+            )
+
+            self.rnn = torch_module.nn.LSTM(
+                input_size=512 * 4,
+                hidden_size=256,
+                num_layers=2,
+                bidirectional=True,
+                batch_first=False,
+            )
+
+            self.fc = torch_module.nn.Linear(512, num_classes)
+
+        def forward(self, x):
+            conv = self.cnn(x)
+            b, c, h, w = conv.size()
+            conv = conv.permute(3, 0, 1, 2)
+            conv = conv.contiguous().view(w, b, c * h)
+            recurrent, _ = self.rnn(conv)
+            output = self.fc(recurrent)
+            return output
+
+    return TorchCrnn()
+
+
+def load_ocr_runtime():
+    onnx_path = ONNX_MODEL_PATH if os.path.exists(ONNX_MODEL_PATH) else DOWNLOADED_ONNX_MODEL_PATH
+    onnx_path = ensure_optional_file_from_url(
+        onnx_path,
+        "LOGCAT_AGENT_CRNN_ONNX_MODEL_URL",
+    )
+
+    if onnx_path:
+        try:
+            import onnxruntime as ort
+        except Exception as e:
+            raise RuntimeError(
+                "缺少 onnxruntime，请安装 onnxruntime 后再运行 OCR 推理"
+            ) from e
+
+        providers = ["CPUExecutionProvider"]
+        available_providers = ort.get_available_providers()
+        if "CUDAExecutionProvider" in available_providers:
+            providers.insert(0, "CUDAExecutionProvider")
+
+        session = ort.InferenceSession(onnx_path, providers=providers)
+        logger.info("timestamp_crnn_best.onnx 加载成功: %s", onnx_path)
+        return OcrRuntime(
+            backend="onnx",
+            model_path=onnx_path,
+            alphabet=DEFAULT_ALPHABET,
+            img_h=DEFAULT_IMG_H,
+            img_w=DEFAULT_IMG_W,
+            session=session,
         )
 
-        self.fc = torch.nn.Linear(512, num_classes)
+    pt_path = MODEL_PATH if os.path.exists(MODEL_PATH) else DOWNLOADED_MODEL_PATH
+    pt_path = ensure_file_from_url(pt_path, "LOGCAT_AGENT_CRNN_MODEL_URL")
 
-    def forward(self, x):
-        conv = self.cnn(x)
-        b, c, h, w = conv.size()
-        conv = conv.permute(3, 0, 1, 2)
-        conv = conv.contiguous().view(w, b, c * h)
-        recurrent, _ = self.rnn(conv)
-        output = self.fc(recurrent)
-        return output
+    try:
+        torch = importlib.import_module("torch")
+    except Exception as e:
+        raise RuntimeError(
+            "当前只有 PyTorch .pt OCR 模型，但运行环境没有 torch。"
+            "请改用 ONNX 模型并设置 LOGCAT_AGENT_CRNN_ONNX_MODEL_URL。"
+        ) from e
+
+    global DEVICE
+    DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+    checkpoint = torch.load(pt_path, map_location=DEVICE)
+    alphabet = checkpoint["alphabet"]
+    img_h = checkpoint["img_h"]
+    img_w = checkpoint["img_w"]
+    torch_model = build_torch_crnn(torch, len(alphabet) + 1).to(DEVICE)
+    torch_model.load_state_dict(checkpoint["model"])
+    torch_model.eval()
+
+    logger.info("timestamp_crnn_best.pt 加载成功: %s", pt_path)
+    return OcrRuntime(
+        backend="torch",
+        model_path=pt_path,
+        alphabet=alphabet,
+        img_h=img_h,
+        img_w=img_w,
+        torch_model=torch_model,
+        torch_module=torch,
+    )
 
 
-if not os.path.exists(MODEL_PATH):
-    raise FileNotFoundError(f"找不到模型文件: {MODEL_PATH}")
-
-checkpoint = torch.load(MODEL_PATH, map_location=DEVICE)
-
-ALPHABET = checkpoint["alphabet"]
-IMG_H = checkpoint["img_h"]
-IMG_W = checkpoint["img_w"]
+OCR_RUNTIME = load_ocr_runtime()
+ALPHABET = OCR_RUNTIME.alphabet
+IMG_H = OCR_RUNTIME.img_h
+IMG_W = OCR_RUNTIME.img_w
 
 BLANK_INDEX = 0
 INDEX_TO_CHAR = {i + 1: c for i, c in enumerate(ALPHABET)}
 
-model = CRNN(num_classes=len(ALPHABET) + 1).to(DEVICE)
-model.load_state_dict(checkpoint["model"])
-model.eval()
-
-logger.info("timestamp_crnn_best.pt 加载成功")
+logger.info(f"OCR_BACKEND: {OCR_RUNTIME.backend}")
+logger.info(f"OCR_MODEL: {OCR_RUNTIME.model_path}")
 logger.info(f"DEVICE: {DEVICE}")
 logger.info(f"IMG_W: {IMG_W}, IMG_H: {IMG_H}")
 logger.info(f"ALPHABET: {ALPHABET}")
@@ -142,15 +347,31 @@ def get_whisper_model():
 
     model_size = os.environ.get("LOGCAT_AGENT_WHISPER_MODEL")
     if not model_size:
-        if os.path.exists(DEFAULT_WHISPER_TURBO_MODEL_PATH):
+        downloaded_turbo = ensure_whisper_model_archive(
+            DOWNLOADED_WHISPER_TURBO_MODEL_PATH,
+            "LOGCAT_AGENT_WHISPER_TURBO_MODEL_URL",
+        )
+        downloaded_small = ensure_whisper_model_archive(
+            DOWNLOADED_WHISPER_MODEL_PATH,
+            "LOGCAT_AGENT_WHISPER_SMALL_MODEL_URL",
+        )
+
+        if downloaded_turbo:
+            model_size = downloaded_turbo
+        elif downloaded_small:
+            model_size = downloaded_small
+        elif has_whisper_model_files(DEFAULT_WHISPER_TURBO_MODEL_PATH):
             model_size = DEFAULT_WHISPER_TURBO_MODEL_PATH
-        elif os.path.exists(DEFAULT_WHISPER_MODEL_PATH):
+        elif has_whisper_model_files(DEFAULT_WHISPER_MODEL_PATH):
             model_size = DEFAULT_WHISPER_MODEL_PATH
         else:
             raise FileNotFoundError(
-                f"本地 Whisper 模型不存在: {DEFAULT_WHISPER_TURBO_MODEL_PATH} 或 {DEFAULT_WHISPER_MODEL_PATH}"
+                "本地 Whisper 模型不存在。请设置 LOGCAT_AGENT_WHISPER_TURBO_MODEL_URL "
+                "或 LOGCAT_AGENT_WHISPER_SMALL_MODEL_URL 为模型压缩包下载地址后重启应用。"
             )
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = os.environ.get("LOGCAT_AGENT_WHISPER_DEVICE", "").strip().lower()
+    if device not in {"cuda", "cpu"}:
+        device = "cpu"
     compute_type = "float16" if device == "cuda" else "int8"
 
     WHISPER_MODEL = WhisperModel(
@@ -326,8 +547,8 @@ def parse_timestamp(text):
 
 
 def decode_prediction(pred):
-    pred = pred.argmax(2)
-    pred = pred[:, 0].detach().cpu().numpy().tolist()
+    pred = np.asarray(pred).argmax(2)
+    pred = pred[:, 0].tolist()
 
     result = []
     last = BLANK_INDEX
@@ -455,16 +676,14 @@ def preprocess_for_crnn(roi):
     img = gray.astype("float32") / 255.0
     img = (img - 0.5) / 0.5
 
-    tensor = torch.tensor(img).unsqueeze(0).unsqueeze(0)
+    input_array = img[np.newaxis, np.newaxis, :, :].astype("float32")
 
-    return tensor.to(DEVICE), gray
+    return input_array, gray
 
 
 def recognize_one_roi(roi):
-    tensor, debug_img = preprocess_for_crnn(roi)
-
-    with torch.no_grad():
-        pred = model(tensor)
+    input_array, debug_img = preprocess_for_crnn(roi)
+    pred = OCR_RUNTIME.predict(input_array)
 
     raw = decode_prediction(pred)
     parsed = parse_timestamp(raw)
@@ -964,17 +1183,19 @@ def locate_source_context(source_root, log_text):
 
     candidates = extract_source_candidates(log_text)
     method_name = extract_method_candidate(log_text)
+    log_message = extract_log_message_candidate(log_text)
 
     for class_name in candidates:
         files = source_file_candidates(root, class_name)
 
         for file_path in files:
-            line_no = find_source_line(file_path, method_name, class_name)
+            line_no = find_source_line(file_path, method_name, class_name, log_message)
             return {
                 "success": True,
                 "source_root": root,
                 "class_name": class_name,
                 "method_name": method_name,
+                "log_message": log_message,
                 "file": file_path,
                 "line": line_no,
                 "excerpt": read_source_excerpt(file_path, line_no),
@@ -986,6 +1207,7 @@ def locate_source_context(source_root, log_text):
         "source_root": root,
         "candidates": candidates,
         "method_name": method_name,
+        "log_message": log_message,
     }
 
 
@@ -1123,10 +1345,20 @@ def analyze_log_flow_with_openai(flow):
 def extract_source_candidates(log_text):
     text = log_text or ""
     candidates = []
+    log_tag = ""
+
+    tag_match = re.search(
+        r"\b[VDIWEAF]\s+([A-Za-z_][A-Za-z0-9_.$]*)\s*:",
+        text,
+    )
+    if tag_match:
+        log_tag = tag_match.group(1).strip(".")
 
     for match in re.finditer(r"\b([A-Za-z_][A-Za-z0-9_.$]*)\s*:", text):
         value = match.group(1).strip(".")
         if not value or value in candidates:
+            continue
+        if log_tag and value != log_tag and match.start() > tag_match.end():
             continue
 
         candidates.append(value)
@@ -1142,6 +1374,23 @@ def extract_source_candidates(log_text):
 def extract_method_candidate(log_text):
     match = re.search(r":\s*([A-Za-z_][A-Za-z0-9_]*)\s*\(", log_text or "")
     return match.group(1) if match else ""
+
+
+def extract_log_message_candidate(log_text):
+    text = log_text or ""
+    match = re.search(
+        r"\b[VDIWEAF]\s+([A-Za-z_][A-Za-z0-9_.$]*)\s*:\s*(.+)$",
+        text,
+    )
+
+    if match:
+        return match.group(2).strip()
+
+    matches = list(re.finditer(r"\b([A-Za-z_][A-Za-z0-9_.$]*)\s*:\s*", text))
+    if not matches:
+        return ""
+
+    return text[matches[0].end():].strip()
 
 
 def source_file_candidates(root, class_name):
@@ -1176,10 +1425,66 @@ def source_file_candidates(root, class_name):
     return matches
 
 
-def find_source_line(file_path, method_name, class_name):
+def source_line_text_candidates(log_message):
+    text = (log_message or "").strip()
+    if not text:
+        return []
+
+    candidates = []
+    normalized = re.sub(r"\s+", " ", text).strip()
+    if normalized:
+        candidates.append(normalized)
+
+    # Labels like "dx:", "dy:", "action:" often survive in source log strings
+    # even when runtime values are interpolated or concatenated.
+    labels = re.findall(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*[:=]", text)
+    label_candidates = []
+    for label in labels:
+        if label not in label_candidates:
+            label_candidates.append(label)
+
+    if label_candidates:
+        candidates.append(label_candidates)
+
+    static_parts = [
+        item.strip()
+        for item in re.split(
+            r"[-+]?\d+(?:\.\d+)?|0x[0-9A-Fa-f]+|true|false|null",
+            text,
+        )
+        if len(item.strip()) >= 3
+    ]
+
+    for part in static_parts:
+        if part not in candidates:
+            candidates.append(part)
+
+    return candidates
+
+
+def find_log_message_line(lines, log_message):
+    candidates = source_line_text_candidates(log_message)
+    if not candidates:
+        return 0
+
+    for candidate in candidates:
+        if isinstance(candidate, str):
+            for index, line in enumerate(lines, start=1):
+                if candidate in line:
+                    return index
+
+        if isinstance(candidate, list) and len(candidate) >= 2:
+            for index, line in enumerate(lines, start=1):
+                if all(label in line for label in candidate):
+                    return index
+
+    return 0
+
+
+def find_source_line(file_path, method_name, class_name, log_message=""):
     line_no = 1
 
-    if not method_name and not class_name:
+    if not method_name and not class_name and not log_message:
         return line_no
 
     try:
@@ -1187,6 +1492,10 @@ def find_source_line(file_path, method_name, class_name):
             lines = list(f)
     except Exception:
         return line_no
+
+    message_line = find_log_message_line(lines, log_message)
+    if message_line:
+        return message_line
 
     if method_name:
         method_pattern = re.compile(
@@ -1349,12 +1658,13 @@ def locate_and_open_source(source_root, log_text):
 
     candidates = extract_source_candidates(log_text)
     method_name = extract_method_candidate(log_text)
+    log_message = extract_log_message_candidate(log_text)
 
     for class_name in candidates:
         files = source_file_candidates(root, class_name)
 
         for file_path in files:
-            line_no = find_source_line(file_path, method_name, class_name)
+            line_no = find_source_line(file_path, method_name, class_name, log_message)
             command = open_source_file(file_path, line_no)
 
             return {
@@ -1362,6 +1672,7 @@ def locate_and_open_source(source_root, log_text):
                 "source_root": root,
                 "class_name": class_name,
                 "method_name": method_name,
+                "log_message": log_message,
                 "file": file_path,
                 "line": line_no,
                 "command": command,
@@ -1373,6 +1684,7 @@ def locate_and_open_source(source_root, log_text):
         "source_root": root,
         "candidates": candidates,
         "method_name": method_name,
+        "log_message": log_message,
     }
 
 
@@ -1680,6 +1992,15 @@ def debug_path():
         "subtitle_root": SUBTITLE_ROOT,
         "model_path": MODEL_PATH,
         "model_exists": os.path.exists(MODEL_PATH),
+        "runtime_model_path": RUNTIME_MODEL_PATH,
+        "runtime_model_exists": os.path.exists(RUNTIME_MODEL_PATH),
+        "model_data_dir": MODEL_DATA_DIR,
+        "downloaded_whisper_turbo_exists": has_whisper_model_files(
+            DOWNLOADED_WHISPER_TURBO_MODEL_PATH,
+        ),
+        "downloaded_whisper_small_exists": has_whisper_model_files(
+            DOWNLOADED_WHISPER_MODEL_PATH,
+        ),
         "ide_cache_path": IDE_CACHE_PATH,
         "android_studio_commands": android_studio_commands(),
         "device": DEVICE,

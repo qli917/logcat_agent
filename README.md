@@ -65,6 +65,26 @@ Root Cause Report
 
 Extract timestamps directly from screen recordings.
 
+### Python Runtime Packaging
+
+The distributed Python service should be built from the runtime-only dependency set:
+
+```bash
+./scripts/build_python_runtime.sh
+```
+
+This runtime intentionally excludes training/CUDA packages:
+
+```text
+torch
+torchvision
+torchaudio
+nvidia-*
+triton
+```
+
+OCR inference uses `onnxruntime` and `timestamp_crnn_best.onnx`; PyTorch is only needed on the training machine to train/export the model.
+
 Supported formats:
 
 ```text

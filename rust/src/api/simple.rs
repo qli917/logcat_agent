@@ -40,8 +40,20 @@ pub fn init_python_engine() -> Result<(), String> {
         return Ok(());
     }
 
-    let child = Command::new("python3")
-        .arg("pythonai/video.py")
+    let runtime_path = Path::new("pythonai")
+        .join("dist")
+        .join("logagent-python")
+        .join("logagent-python");
+
+    let mut command = if runtime_path.exists() {
+        Command::new(runtime_path)
+    } else {
+        let mut fallback = Command::new("python3");
+        fallback.arg("pythonai/video.py");
+        fallback
+    };
+
+    let child = command
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .spawn()
