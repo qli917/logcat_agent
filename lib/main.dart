@@ -109,6 +109,7 @@ class DropArea extends StatefulWidget {
 class _DropAreaState extends State<DropArea> {
   static const _tagKeywordCacheKey = "tag_keyword";
   static const _sourceDirCacheKey = "source_dir";
+  static const _pythonBaseUrl = "http://127.0.0.1:5000";
   static const int _defaultRangeMs = 100;
 
   late final Player player = Player();
@@ -283,13 +284,53 @@ class _DropAreaState extends State<DropArea> {
     }
   }
 
-  Future<void> _ensureTranscribeApiReady() async {
-    final response = await http
-        .get(Uri.parse("http://127.0.0.1:5000/debug_path"))
-        .timeout(const Duration(seconds: 5));
-    final data = _decodePythonJson(response, "/debug_path");
+  Future<Map<String, dynamic>> _waitForPythonService() async {
+    Object? lastError;
+    final deadline = DateTime.now().add(const Duration(seconds: 30));
 
-    if (response.statusCode != 200 || !data.containsKey("subtitle_root")) {
+    while (DateTime.now().isBefore(deadline)) {
+      try {
+        await initPythonEngine();
+        final response = await http
+            .get(Uri.parse("$_pythonBaseUrl/debug_path"))
+            .timeout(const Duration(seconds: 2));
+        final data = _decodePythonJson(response, "/debug_path");
+
+        if (response.statusCode == 200) {
+          return data;
+        }
+
+        lastError = "HTTP ${response.statusCode}";
+      } catch (e) {
+        lastError = e;
+      }
+
+      await Future.delayed(const Duration(milliseconds: 500));
+    }
+
+    throw Exception("Python OCR/字幕服务未就绪: ${lastError ?? "timeout"}");
+  }
+
+  Future<void> _ensureOcrApiReady() async {
+    final data = await _waitForPythonService();
+
+    if (data["ocr_onnx_model_exists"] == false ||
+        data["runtime_model_exists"] == false) {
+      final modelPath =
+          (data["runtime_model_path"] ?? data["ocr_onnx_model_path"] ?? "")
+              .toString();
+      throw Exception(
+        modelPath.isEmpty
+            ? "当前 Python 服务没有找到 OCR 模型，请重启应用后再试。"
+            : "当前 Python 服务没有找到 OCR 模型: $modelPath",
+      );
+    }
+  }
+
+  Future<void> _ensureTranscribeApiReady() async {
+    final data = await _waitForPythonService();
+
+    if (!data.containsKey("subtitle_root")) {
       throw Exception("当前 Python 服务不支持语音字幕接口，请重启应用，或停止旧的 5000 端口服务后再试。");
     }
 
@@ -302,7 +343,9 @@ class _DropAreaState extends State<DropArea> {
     if (data["funasr_model_exists"] == false) {
       final modelPath = (data["funasr_model_path"] ?? "").toString();
       final localModelPath = (data["local_funasr_model_path"] ?? "").toString();
-      final expectedPath = localModelPath.isNotEmpty ? localModelPath : modelPath;
+      final expectedPath = localModelPath.isNotEmpty
+          ? localModelPath
+          : modelPath;
       throw Exception(
         expectedPath.isEmpty
             ? "当前 Python 服务没有找到 FunASR 字幕模型，请重启应用后再试。"
@@ -625,7 +668,7 @@ class _DropAreaState extends State<DropArea> {
       });
 
       final uri = Uri.parse(
-        "http://127.0.0.1:5000/transcribe",
+        "$_pythonBaseUrl/transcribe",
       ).replace(queryParameters: {'audio_path': audioPath});
 
       final response = await http.get(uri).timeout(const Duration(minutes: 5));
@@ -721,7 +764,9 @@ class _DropAreaState extends State<DropArea> {
     try {
       log += "[1/2] Python OCR 识别视频时间戳中...\n";
 
-      final uri = Uri.parse("http://127.0.0.1:5000/ocr").replace(
+      await _ensureOcrApiReady();
+
+      final uri = Uri.parse("$_pythonBaseUrl/ocr").replace(
         queryParameters: {
           'path': videoPath!,
           'time': timeMs.toString(),
@@ -756,7 +801,7 @@ class _DropAreaState extends State<DropArea> {
 
       final response2 = await http
           .post(
-            Uri.parse("http://127.0.0.1:5000/open_by_timestamp"),
+            Uri.parse("$_pythonBaseUrl/open_by_timestamp"),
             headers: const {"Content-Type": "application/json"},
             body: jsonEncode({
               "timestamp": timestamp.toString(),
@@ -848,9 +893,11 @@ class _DropAreaState extends State<DropArea> {
   Future<Map<String, dynamic>> _requestLogFlowAnalysis(
     Map<String, dynamic> flow,
   ) async {
+    await _waitForPythonService();
+
     final response = await http
         .post(
-          Uri.parse("http://127.0.0.1:5000/analyze_log_flow"),
+          Uri.parse("$_pythonBaseUrl/analyze_log_flow"),
           headers: const {"Content-Type": "application/json"},
           body: jsonEncode(flow),
         )
@@ -1401,9 +1448,11 @@ class _DropAreaState extends State<DropArea> {
     }
 
     try {
+      await _waitForPythonService();
+
       final response = await http
           .post(
-            Uri.parse("http://127.0.0.1:5000/open_source_hit"),
+            Uri.parse("$_pythonBaseUrl/open_source_hit"),
             headers: const {"Content-Type": "application/json"},
             body: jsonEncode({
               "source_root": sourceDirController.text.trim(),

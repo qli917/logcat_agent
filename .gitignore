@@ -69,10 +69,14 @@ __pycache__/
 *.pyd
 .env
 .venv/
+.venv-runtime/
 venv/
 .numba_cache/
 log_hunter_subtitles/
 debug_orc/
+dist/
+pythonai/build/
+pythonai/dist/
 
 # Rust
 target/

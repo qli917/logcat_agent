@@ -1,8 +1,10 @@
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
+use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::thread;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use chrono::NaiveDateTime;
 use lazy_static::lazy_static;
@@ -40,7 +42,17 @@ pub fn init_python_engine() -> Result<(), String> {
         return Ok(());
     }
 
-    let runtime_path = Path::new("pythonai")
+    if python_service_ready() {
+        return Ok(());
+    }
+
+    let app_dir = std::env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(Path::to_path_buf))
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+
+    let runtime_path = app_dir
+        .join("pythonai")
         .join("dist")
         .join("logagent-python")
         .join("logagent-python");
@@ -53,17 +65,105 @@ pub fn init_python_engine() -> Result<(), String> {
         fallback
     };
 
-    let child = command
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
+    let log_path = python_log_path();
+    let model_dir = python_model_dir();
+    let log_file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&log_path)
+        .map_err(|e| format!("无法创建 Python OCR 服务日志 {}: {}", log_path.display(), e))?;
+    let log_file_for_stderr = log_file
+        .try_clone()
+        .map_err(|e| format!("无法复制 Python OCR 服务日志句柄: {}", e))?;
+
+    command.env("PYTHONUNBUFFERED", "1");
+    command.env("LOGCAT_AGENT_MODEL_DIR", &model_dir);
+
+    let mut child = command
+        .stdout(Stdio::from(log_file))
+        .stderr(Stdio::from(log_file_for_stderr))
         .spawn()
         .map_err(|e| format!("无法启动 Python OCR 服务: {}", e))?;
+
+    wait_for_python_service(&mut child, &log_path)?;
 
     *process_guard = Some(child);
 
     println!("🚀 Python OCR 服务已启动");
 
     Ok(())
+}
+
+fn python_service_ready() -> bool {
+    let addr: SocketAddr = "127.0.0.1:5000".parse().unwrap();
+    TcpStream::connect_timeout(&addr, Duration::from_millis(250)).is_ok()
+}
+
+fn python_log_path() -> PathBuf {
+    std::env::current_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join("logagent-python.log")
+}
+
+fn python_model_dir() -> PathBuf {
+    std::env::current_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join("logagent_models")
+}
+
+fn read_log_tail(log_path: &Path) -> String {
+    let content = fs::read_to_string(log_path).unwrap_or_default();
+    let lines: Vec<&str> = content.lines().collect();
+    let start = lines.len().saturating_sub(40);
+    lines[start..].join("\n")
+}
+
+fn python_failure_message(prefix: &str, log_path: &Path) -> String {
+    let tail = read_log_tail(log_path);
+
+    if tail.trim().is_empty() {
+        format!("{}\nPython日志: {}", prefix, log_path.display())
+    } else {
+        format!(
+            "{}\nPython日志: {}\n--- log tail ---\n{}",
+            prefix,
+            log_path.display(),
+            tail
+        )
+    }
+}
+
+fn wait_for_python_service(child: &mut std::process::Child, log_path: &Path) -> Result<(), String> {
+    let deadline = Instant::now() + Duration::from_secs(30);
+
+    while Instant::now() < deadline {
+        if python_service_ready() {
+            return Ok(());
+        }
+
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                return Err(python_failure_message(
+                    &format!("Python OCR 服务启动后立即退出: {}", status),
+                    log_path,
+                ));
+            }
+            Ok(None) => {}
+            Err(e) => {
+                return Err(format!("检查 Python OCR 服务状态失败: {}", e));
+            }
+        }
+
+        thread::sleep(Duration::from_millis(300));
+    }
+
+    let _ = child.kill();
+
+    Err(python_failure_message(
+        "Python OCR 服务启动超时，127.0.0.1:5000 未就绪",
+        log_path,
+    ))
 }
 
 pub fn stop_python_engine() {

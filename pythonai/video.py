@@ -13,6 +13,8 @@ import zipfile
 import tarfile
 import tempfile
 import importlib
+import importlib.util
+import types
 import wave
 import contextlib
 from flask import Flask, request, jsonify
@@ -38,12 +40,12 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(BASE_DIR)
+BASE_DIR = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+PROJECT_ROOT = os.getcwd() if getattr(sys, "frozen", False) else os.path.dirname(BASE_DIR)
 ONNX_MODEL_PATH = os.path.join(BASE_DIR, "timestamp_crnn_best.onnx")
 LOCAL_FUNASR_MODEL_PATH = os.path.join(BASE_DIR, "funasr-paraformer-zh")
 NUMBA_CACHE_DIR = os.path.join(PROJECT_ROOT, ".numba_cache")
-DEBUG_ROOT = os.path.join(BASE_DIR, "debug_ocr")
+DEBUG_ROOT = os.path.join(PROJECT_ROOT, "debug_ocr")
 DEFAULT_EXTRACT_DIR = os.path.join(PROJECT_ROOT, "log_hunter_extracted")
 SUBTITLE_ROOT = os.path.join(PROJECT_ROOT, "log_hunter_subtitles")
 IDE_CACHE_PATH = os.path.join(PROJECT_ROOT, ".logagent_ide.json")
@@ -219,13 +221,7 @@ def get_funasr_model():
     if FUNASR_MODEL is not None:
         return FUNASR_MODEL
 
-    try:
-        importlib.invalidate_caches()
-        from funasr_onnx import Paraformer
-    except Exception as e:
-        raise RuntimeError(
-            "缺少 funasr_onnx，请先安装 Python 依赖: pip install funasr-onnx"
-        ) from e
+    Paraformer = load_funasr_paraformer_class()
 
     env_model_dir = os.environ.get("LOGCAT_AGENT_FUNASR_MODEL_DIR", "").strip()
     if env_model_dir:
@@ -254,6 +250,65 @@ def get_funasr_model():
     logger.info("FunASR Paraformer 加载成功 model=%s", model_dir)
 
     return FUNASR_MODEL
+
+
+def load_funasr_paraformer_class():
+    try:
+        importlib.invalidate_caches()
+        if "librosa" not in sys.modules:
+            fake_librosa = types.ModuleType("librosa")
+            fake_librosa.load = load_wav_for_funasr
+            sys.modules["librosa"] = fake_librosa
+
+        package_spec = importlib.util.find_spec("funasr_onnx")
+        if package_spec is None or not package_spec.submodule_search_locations:
+            raise ImportError("funasr_onnx package not found")
+
+        package_dir = next(iter(package_spec.submodule_search_locations))
+        package = sys.modules.get("funasr_onnx")
+        if package is None:
+            package = types.ModuleType("funasr_onnx")
+            package.__path__ = [package_dir]
+            package.__package__ = "funasr_onnx"
+            sys.modules["funasr_onnx"] = package
+
+        module_name = "funasr_onnx.paraformer_bin"
+        module = sys.modules.get(module_name)
+        if module is None:
+            module_path = os.path.join(package_dir, "paraformer_bin.py")
+            module_spec = importlib.util.spec_from_file_location(module_name, module_path)
+            if module_spec is None or module_spec.loader is None:
+                raise ImportError(f"无法加载 {module_path}")
+
+            module = importlib.util.module_from_spec(module_spec)
+            sys.modules[module_name] = module
+            module_spec.loader.exec_module(module)
+
+        return module.Paraformer
+    except Exception as e:
+        raise RuntimeError(
+            "缺少 funasr_onnx，请先安装 Python 依赖: pip install funasr-onnx"
+        ) from e
+
+
+def load_wav_for_funasr(path, sr=16000):
+    with contextlib.closing(wave.open(path, "rb")) as wav:
+        channels = wav.getnchannels()
+        sample_width = wav.getsampwidth()
+        rate = wav.getframerate()
+        frames = wav.readframes(wav.getnframes())
+
+    if sample_width != 2:
+        raise ValueError(f"FunASR 只支持 16-bit PCM wav，当前采样宽度: {sample_width}")
+
+    audio = np.frombuffer(frames, dtype=np.int16)
+    if channels > 1:
+        audio = audio.reshape(-1, channels).mean(axis=1).astype(np.int16)
+
+    if sr and rate != sr:
+        raise ValueError(f"FunASR 需要 {sr}Hz wav，当前采样率: {rate}")
+
+    return audio.astype(np.float32) / 32768.0, rate
 
 
 def normalize_bug_description(segments):
@@ -434,8 +489,9 @@ def transcribe_audio(audio_path):
 
     model = get_funasr_model()
     duration = audio_duration_seconds(audio_path)
+    audio, _ = load_wav_for_funasr(audio_path, sr=16000)
     result = model(
-        [audio_path],
+        audio,
         sentence_timestamp=True,
     )
     subtitles = funasr_sentence_segments(result, duration)

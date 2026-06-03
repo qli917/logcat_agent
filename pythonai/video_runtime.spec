@@ -1,6 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 from PyInstaller.utils.hooks import collect_submodules
+import importlib.util
 
 
 block_cipher = None
@@ -18,16 +19,47 @@ excluded_modules = [
     "matplotlib",
     "pandas",
     "PIL.ImageTk",
+    "modelscope",
+    "paddle",
+    "onnx",
+    "onnxruntime.tools",
+    "onnxruntime.quantization",
+    "onnxruntime.transformers",
+    "skimage",
+    "shapely",
+    "av",
+    "tokenizers",
+    "huggingface_hub",
+    "transformers",
+    "soundfile",
+    "librosa",
+    "numba",
+    "llvmlite",
 ]
+
+
+def package_dir(package_name):
+    spec = importlib.util.find_spec(package_name)
+    if spec is None or not spec.submodule_search_locations:
+        raise RuntimeError(f"Cannot find package: {package_name}")
+    return next(iter(spec.submodule_search_locations))
 
 a = Analysis(
     ["video.py"],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[
+        ("timestamp_crnn_best.onnx", "."),
+        ("funasr-paraformer-zh", "funasr-paraformer-zh"),
+        (package_dir("funasr_onnx"), "funasr_onnx"),
+    ],
     hiddenimports=[
-        *collect_submodules("funasr_onnx"),
-        *collect_submodules("onnxruntime"),
+        "onnxruntime",
+        "onnxruntime.capi.onnxruntime_pybind11_state",
+        "kaldi_native_fbank",
+        "yaml",
+        "jieba",
+        "sentencepiece",
     ],
     hookspath=[],
     hooksconfig={},
