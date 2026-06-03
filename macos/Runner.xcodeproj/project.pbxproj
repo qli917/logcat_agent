@@ -208,6 +208,7 @@
 				33CC10EA2044A3C60003C045 /* Frameworks */,
 				33CC10EB2044A3C60003C045 /* Resources */,
 				33CC110E2044A8840003C045 /* Bundle Framework */,
+				33D0F0012C10A10000123456 /* Bundle FFmpeg */,
 				3399D490228B24CF009A79C7 /* ShellScript */,
 			);
 			buildRules = (
@@ -308,6 +309,25 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
 			shellScript = "echo \"$PRODUCT_NAME.app\" > \"$PROJECT_DIR\"/Flutter/ephemeral/.app_filename && \"$FLUTTER_ROOT\"/packages/flutter_tools/bin/macos_assemble.sh embed\n";
+		};
+		33D0F0012C10A10000123456 /* Bundle FFmpeg */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Bundle FFmpeg";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -e\nFFMPEG_DIR=\"$PROJECT_DIR/../third_party/ffmpeg/macos\"\nDEST_DIR=\"$(dirname \"$TARGET_BUILD_DIR/$EXECUTABLE_PATH\")\"\nfor tool in ffmpeg ffprobe; do\n  if [ -f \"$FFMPEG_DIR/$tool\" ]; then\n    cp \"$FFMPEG_DIR/$tool\" \"$DEST_DIR/$tool\"\n    chmod +x \"$DEST_DIR/$tool\"\n  fi\ndone\n";
 		};
 		33CC111E2044C6BF0003C045 /* ShellScript */ = {
 			isa = PBXShellScriptBuildPhase;

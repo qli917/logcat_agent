@@ -85,6 +85,26 @@ triton
 
 OCR inference uses `onnxruntime` and `timestamp_crnn_best.onnx`; subtitles use the FunASR ONNX runtime. PyTorch is only needed on the training machine to train/export the OCR model.
 
+### Built-in FFmpeg
+
+Put the FFmpeg binaries for each target platform here before building:
+
+```text
+third_party/
+  ffmpeg/
+    windows/
+      ffmpeg.exe
+      ffprobe.exe
+    macos/
+      ffmpeg
+      ffprobe
+    linux/
+      ffmpeg
+      ffprobe
+```
+
+Only `ffmpeg` and `ffprobe` are required for the platform you are packaging. The desktop builds copy them next to the app executable, and the app uses the bundled FFmpeg first instead of depending on the user's system environment or `PATH`.
+
 During development, the local FunASR model can live next to the OCR model:
 
 ```text

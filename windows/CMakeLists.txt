@@ -87,6 +87,15 @@ if(PLUGIN_BUNDLED_LIBRARIES)
     COMPONENT Runtime)
 endif()
 
+set(BUNDLED_FFMPEG_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/ffmpeg/windows")
+foreach(FFMPEG_TOOL ffmpeg.exe ffprobe.exe)
+  if(EXISTS "${BUNDLED_FFMPEG_DIR}/${FFMPEG_TOOL}")
+    install(FILES "${BUNDLED_FFMPEG_DIR}/${FFMPEG_TOOL}"
+      DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
+      COMPONENT Runtime)
+  endif()
+endforeach()
+
 # Copy the native assets provided by the build.dart from all packages.
 set(NATIVE_ASSETS_DIR "${PROJECT_BUILD_DIR}native_assets/windows/")
 install(DIRECTORY "${NATIVE_ASSETS_DIR}"

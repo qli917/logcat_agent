@@ -28,11 +28,70 @@ lazy_static! {
 
 const MAX_LOG_FILE_INDEX_CACHE_FILES: usize = 4;
 const MAX_LOG_FILE_INDEX_CACHE_BYTES: usize = 256 * 1024 * 1024;
+const BUNDLED_FFMPEG_ROOT: &str = "third_party/ffmpeg";
 
 struct LogFileIndex {
     mmap: Arc<Mmap>,
     line_ranges: Arc<Vec<(usize, usize)>>,
     size: usize,
+}
+
+fn current_app_dir() -> PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(Path::to_path_buf))
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+}
+
+fn executable_name(name: &str) -> String {
+    if cfg!(windows) {
+        format!("{}.exe", name)
+    } else {
+        name.to_string()
+    }
+}
+
+fn bundled_ffmpeg_platform_dir() -> &'static str {
+    if cfg!(windows) {
+        "windows"
+    } else if cfg!(target_os = "macos") {
+        "macos"
+    } else {
+        "linux"
+    }
+}
+
+fn bundled_ffmpeg_dev_dir() -> PathBuf {
+    PathBuf::from(BUNDLED_FFMPEG_ROOT).join(bundled_ffmpeg_platform_dir())
+}
+
+fn bundled_tool_path(name: &str) -> Option<PathBuf> {
+    let executable = executable_name(name);
+    let app_dir = current_app_dir();
+    let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+
+    [
+        app_dir.join(&executable),
+        app_dir.join("ffmpeg").join(&executable),
+        app_dir.join("tools").join(&executable),
+        current_dir.join(bundled_ffmpeg_dev_dir()).join(&executable),
+    ]
+    .into_iter()
+    .find(|path| path.exists())
+}
+
+fn command_tool_path(name: &str) -> PathBuf {
+    bundled_tool_path(name).unwrap_or_else(|| PathBuf::from(executable_name(name)))
+}
+
+fn prepend_path_env(path_env: &mut std::ffi::OsString, dir: &Path) {
+    let mut paths: Vec<PathBuf> = std::env::split_paths(path_env).collect();
+    if !paths.iter().any(|path| path == dir) {
+        paths.insert(0, dir.to_path_buf());
+        if let Ok(joined) = std::env::join_paths(paths) {
+            *path_env = joined;
+        }
+    }
 }
 
 pub fn init_python_engine() -> Result<(), String> {
@@ -46,18 +105,20 @@ pub fn init_python_engine() -> Result<(), String> {
         return Ok(());
     }
 
-    let app_dir = std::env::current_exe()
-        .ok()
-        .and_then(|path| path.parent().map(Path::to_path_buf))
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+    let app_dir = current_app_dir();
 
-    let runtime_path = app_dir
+    let runtime_dir = app_dir
         .join("pythonai")
         .join("dist")
-        .join("logagent-python")
         .join("logagent-python");
+    let runtime_path = [
+        runtime_dir.join(executable_name("logagent-python")),
+        runtime_dir.join("logagent-python"),
+    ]
+    .into_iter()
+    .find(|path| path.exists());
 
-    let mut command = if runtime_path.exists() {
+    let mut command = if let Some(runtime_path) = runtime_path {
         Command::new(runtime_path)
     } else {
         let mut fallback = Command::new("python3");
@@ -79,6 +140,24 @@ pub fn init_python_engine() -> Result<(), String> {
 
     command.env("PYTHONUNBUFFERED", "1");
     command.env("LOGCAT_AGENT_MODEL_DIR", &model_dir);
+    if let Some(ffmpeg_path) = bundled_tool_path("ffmpeg") {
+        command.env("IMAGEIO_FFMPEG_EXE", &ffmpeg_path);
+        command.env("FFMPEG_BINARY", &ffmpeg_path);
+
+        let mut path_env = std::env::var_os("PATH").unwrap_or_default();
+        if let Some(ffmpeg_dir) = ffmpeg_path.parent() {
+            prepend_path_env(&mut path_env, ffmpeg_dir);
+        }
+
+        if let Some(ffprobe_path) = bundled_tool_path("ffprobe") {
+            command.env("FFPROBE_BINARY", &ffprobe_path);
+            if let Some(ffprobe_dir) = ffprobe_path.parent() {
+                prepend_path_env(&mut path_env, ffprobe_dir);
+            }
+        }
+
+        command.env("PATH", path_env);
+    }
 
     let mut child = command
         .stdout(Stdio::from(log_file))
@@ -220,7 +299,9 @@ pub fn extract_audio_from_video(video_path: String) -> Result<String, String> {
 
     let output_path = project_audio_dir()?.join(format!("{}_{}.wav", stem, ts));
 
-    let output = Command::new("ffmpeg")
+    let ffmpeg_path = command_tool_path("ffmpeg");
+
+    let output = Command::new(&ffmpeg_path)
         .arg("-y")
         .arg("-i")
         .arg(&video_path)
@@ -235,7 +316,15 @@ pub fn extract_audio_from_video(video_path: String) -> Result<String, String> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
-        .map_err(|e| format!("无法启动 ffmpeg，请确认已安装: {}", e))?;
+        .map_err(|e| {
+            format!(
+                "无法启动 ffmpeg。请把 {} 放到程序目录，或放到 {}/{}: {}",
+                executable_name("ffmpeg"),
+                bundled_ffmpeg_dev_dir().display(),
+                executable_name("ffmpeg"),
+                e
+            )
+        })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);

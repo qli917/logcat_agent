@@ -115,6 +115,26 @@ Sublime Text
 - PyTorch
 - CRNN OCR
 
+### Built-in FFmpeg
+
+Put the FFmpeg binaries for each target platform here before building:
+
+```text
+third_party/
+  ffmpeg/
+    windows/
+      ffmpeg.exe
+      ffprobe.exe
+    macos/
+      ffmpeg
+      ffprobe
+    linux/
+      ffmpeg
+      ffprobe
+```
+
+Only `ffmpeg` and `ffprobe` are required for the platform you are packaging. The desktop builds copy them next to the app executable, and the app uses the bundled FFmpeg before falling back to the system `PATH`.
+
 ---
 
 ## 📋 Workflow

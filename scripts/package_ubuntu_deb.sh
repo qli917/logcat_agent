@@ -17,6 +17,11 @@ if [[ ! -x "$APP_DIR/LogAgent" ]]; then
     exit 1
 fi
 
+if [[ ! -x "$APP_DIR/ffmpeg" || ! -x "$APP_DIR/ffprobe" ]]; then
+    echo "Missing bundled FFmpeg binaries in $APP_DIR: ffmpeg and ffprobe are required." >&2
+    exit 1
+fi
+
 rm -rf "$PACKAGE_ROOT"
 mkdir -p \
     "$PACKAGE_ROOT/DEBIAN" \
@@ -35,7 +40,7 @@ Section: utils
 Priority: optional
 Architecture: $ARCH
 Maintainer: LogAgent <logagent@example.local>
-Depends: libc6, libgtk-3-0, libstdc++6, ffmpeg
+Depends: libc6, libgtk-3-0, libstdc++6
 Description: LogAgent desktop log and video analysis tool
  LogAgent bundles the Flutter desktop app, Python runtime, OCR model, and FunASR model.
 EOF

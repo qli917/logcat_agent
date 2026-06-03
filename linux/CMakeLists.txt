@@ -120,6 +120,15 @@ foreach(bundled_library ${PLUGIN_BUNDLED_LIBRARIES})
     COMPONENT Runtime)
 endforeach(bundled_library)
 
+set(BUNDLED_FFMPEG_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/ffmpeg/linux")
+foreach(FFMPEG_TOOL ffmpeg ffprobe)
+  if(EXISTS "${BUNDLED_FFMPEG_DIR}/${FFMPEG_TOOL}")
+    install(PROGRAMS "${BUNDLED_FFMPEG_DIR}/${FFMPEG_TOOL}"
+      DESTINATION "${CMAKE_INSTALL_PREFIX}"
+      COMPONENT Runtime)
+  endif()
+endforeach()
+
 # Copy the native assets provided by the build.dart from all packages.
 # 🚀 【安全防线】：只有当目录真正存在时才触发安装，彻底解决空目录熔断 Bug！
 set(NATIVE_ASSETS_DIR "${PROJECT_BUILD_DIR}native_assets/linux/")
