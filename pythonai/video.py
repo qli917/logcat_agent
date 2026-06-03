@@ -13,9 +13,20 @@ import zipfile
 import tarfile
 import tempfile
 import importlib
+import wave
+import contextlib
 from flask import Flask, request, jsonify
 from datetime import datetime
 from collections import Counter
+from model_download import (
+    MODEL_DATA_DIR,
+    DOWNLOADED_ONNX_MODEL_PATH,
+    DOWNLOADED_FUNASR_MODEL_PATH,
+    MODEL_BUNDLE_READY_PATH,
+    download_file,
+    ensure_model_bundle,
+    has_funasr_model_files,
+)
 
 app = Flask(__name__)
 
@@ -29,26 +40,9 @@ logger = logging.getLogger(__name__)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(BASE_DIR)
-MODEL_DATA_DIR = os.environ.get(
-    "LOGCAT_AGENT_MODEL_DIR",
-    os.path.join(os.path.expanduser("~"), ".local", "share", "logagent", "models"),
-)
-
-MODEL_PATH = os.path.join(BASE_DIR, "timestamp_crnn_best.pt")
-DOWNLOADED_MODEL_PATH = os.path.join(MODEL_DATA_DIR, "timestamp_crnn_best.pt")
 ONNX_MODEL_PATH = os.path.join(BASE_DIR, "timestamp_crnn_best.onnx")
-DOWNLOADED_ONNX_MODEL_PATH = os.path.join(MODEL_DATA_DIR, "timestamp_crnn_best.onnx")
-DEFAULT_WHISPER_TURBO_MODEL_PATH = os.path.join(
-    BASE_DIR,
-    "models",
-    "faster-whisper-large-v3-turbo",
-)
-DEFAULT_WHISPER_MODEL_PATH = os.path.join(BASE_DIR, "models", "faster-whisper-small")
-DOWNLOADED_WHISPER_TURBO_MODEL_PATH = os.path.join(
-    MODEL_DATA_DIR,
-    "faster-whisper-large-v3-turbo",
-)
-DOWNLOADED_WHISPER_MODEL_PATH = os.path.join(MODEL_DATA_DIR, "faster-whisper-small")
+LOCAL_FUNASR_MODEL_PATH = os.path.join(BASE_DIR, "funasr-paraformer-zh")
+NUMBA_CACHE_DIR = os.path.join(PROJECT_ROOT, ".numba_cache")
 DEBUG_ROOT = os.path.join(BASE_DIR, "debug_ocr")
 DEFAULT_EXTRACT_DIR = os.path.join(PROJECT_ROOT, "log_hunter_extracted")
 SUBTITLE_ROOT = os.path.join(PROJECT_ROOT, "log_hunter_subtitles")
@@ -61,42 +55,13 @@ OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "").strip()
 os.makedirs(DEBUG_ROOT, exist_ok=True)
 os.makedirs(SUBTITLE_ROOT, exist_ok=True)
 os.makedirs(MODEL_DATA_DIR, exist_ok=True)
+os.environ.setdefault("NUMBA_CACHE_DIR", NUMBA_CACHE_DIR)
+os.makedirs(os.environ["NUMBA_CACHE_DIR"], exist_ok=True)
 
 DEVICE = "cpu"
 DEFAULT_ALPHABET = "0123456789-: "
 DEFAULT_IMG_H = 64
 DEFAULT_IMG_W = 512
-
-
-def download_file(url, target_path):
-    os.makedirs(os.path.dirname(target_path), exist_ok=True)
-    temp_path = target_path + ".download"
-
-    logger.info("开始下载模型: %s", url)
-
-    with requests.get(url, stream=True, timeout=(10, 60)) as response:
-        response.raise_for_status()
-        with open(temp_path, "wb") as f:
-            for chunk in response.iter_content(chunk_size=1024 * 1024):
-                if chunk:
-                    f.write(chunk)
-
-    os.replace(temp_path, target_path)
-    logger.info("模型下载完成: %s", target_path)
-
-
-def ensure_file_from_url(target_path, url_env_name):
-    if os.path.exists(target_path):
-        return target_path
-
-    url = os.environ.get(url_env_name, "").strip()
-    if not url:
-        raise FileNotFoundError(
-            f"找不到模型文件: {target_path}。请设置环境变量 {url_env_name} 后重启应用。"
-        )
-
-    download_file(url, target_path)
-    return target_path
 
 
 def ensure_optional_file_from_url(target_path, url_env_name):
@@ -109,67 +74,6 @@ def ensure_optional_file_from_url(target_path, url_env_name):
 
     download_file(url, target_path)
     return target_path
-
-
-def has_whisper_model_files(model_dir):
-    required = ["model.bin", "config.json"]
-    return all(os.path.isfile(os.path.join(model_dir, item)) for item in required)
-
-
-def move_extracted_model_files(extract_dir, target_dir):
-    if has_whisper_model_files(extract_dir):
-        source_dir = extract_dir
-    else:
-        source_dir = ""
-        for current_root, _, _ in os.walk(extract_dir):
-            if has_whisper_model_files(current_root):
-                source_dir = current_root
-                break
-
-        if not source_dir:
-            raise FileNotFoundError("下载的 Whisper 模型压缩包内缺少 model.bin/config.json")
-
-    if os.path.isdir(target_dir):
-        shutil.rmtree(target_dir)
-
-    os.makedirs(os.path.dirname(target_dir), exist_ok=True)
-    shutil.move(source_dir, target_dir)
-
-
-def extract_model_archive(archive_path, target_dir):
-    with tempfile.TemporaryDirectory(prefix="logagent_model_") as temp_dir:
-        if zipfile.is_zipfile(archive_path):
-            with zipfile.ZipFile(archive_path) as archive:
-                archive.extractall(temp_dir)
-        elif tarfile.is_tarfile(archive_path):
-            with tarfile.open(archive_path) as archive:
-                archive.extractall(temp_dir)
-        else:
-            raise ValueError("模型压缩包必须是 zip、tar 或 tar.gz 格式")
-
-        move_extracted_model_files(temp_dir, target_dir)
-
-
-def ensure_whisper_model_archive(target_dir, url_env_name):
-    if has_whisper_model_files(target_dir):
-        return target_dir
-
-    url = os.environ.get(url_env_name, "").strip()
-    if not url:
-        return ""
-
-    os.makedirs(MODEL_DATA_DIR, exist_ok=True)
-    archive_name = os.path.basename(url.split("?", 1)[0]) or f"{os.path.basename(target_dir)}.zip"
-    archive_path = os.path.join(MODEL_DATA_DIR, archive_name)
-    download_file(url, archive_path)
-    extract_model_archive(archive_path, target_dir)
-
-    try:
-        os.remove(archive_path)
-    except OSError:
-        pass
-
-    return target_dir
 
 
 class OcrRuntime:
@@ -252,6 +156,8 @@ def build_torch_crnn(torch_module, num_classes):
 
 
 def load_ocr_runtime():
+    ensure_model_bundle()
+
     onnx_path = ONNX_MODEL_PATH if os.path.exists(ONNX_MODEL_PATH) else DOWNLOADED_ONNX_MODEL_PATH
     onnx_path = ensure_optional_file_from_url(
         onnx_path,
@@ -282,36 +188,9 @@ def load_ocr_runtime():
             session=session,
         )
 
-    pt_path = MODEL_PATH if os.path.exists(MODEL_PATH) else DOWNLOADED_MODEL_PATH
-    pt_path = ensure_file_from_url(pt_path, "LOGCAT_AGENT_CRNN_MODEL_URL")
-
-    try:
-        torch = importlib.import_module("torch")
-    except Exception as e:
-        raise RuntimeError(
-            "当前只有 PyTorch .pt OCR 模型，但运行环境没有 torch。"
-            "请改用 ONNX 模型并设置 LOGCAT_AGENT_CRNN_ONNX_MODEL_URL。"
-        ) from e
-
-    global DEVICE
-    DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-    checkpoint = torch.load(pt_path, map_location=DEVICE)
-    alphabet = checkpoint["alphabet"]
-    img_h = checkpoint["img_h"]
-    img_w = checkpoint["img_w"]
-    torch_model = build_torch_crnn(torch, len(alphabet) + 1).to(DEVICE)
-    torch_model.load_state_dict(checkpoint["model"])
-    torch_model.eval()
-
-    logger.info("timestamp_crnn_best.pt 加载成功: %s", pt_path)
-    return OcrRuntime(
-        backend="torch",
-        model_path=pt_path,
-        alphabet=alphabet,
-        img_h=img_h,
-        img_w=img_w,
-        torch_model=torch_model,
-        torch_module=torch,
+    raise FileNotFoundError(
+        "缺少 OCR ONNX 模型 timestamp_crnn_best.onnx。请把模型放到 "
+        f"{ONNX_MODEL_PATH}，或设置 LOGCAT_AGENT_MODEL_BUNDLE_URL 为包含 OCR 和字幕模型的 zip 地址。"
     )
 
 
@@ -329,65 +208,52 @@ logger.info(f"DEVICE: {DEVICE}")
 logger.info(f"IMG_W: {IMG_W}, IMG_H: {IMG_H}")
 logger.info(f"ALPHABET: {ALPHABET}")
 
-WHISPER_MODEL = None
+FUNASR_MODEL = None
+FUNASR_MODEL_PATH = ""
 
 
-def get_whisper_model():
-    global WHISPER_MODEL
+def get_funasr_model():
+    global FUNASR_MODEL
+    global FUNASR_MODEL_PATH
 
-    if WHISPER_MODEL is not None:
-        return WHISPER_MODEL
+    if FUNASR_MODEL is not None:
+        return FUNASR_MODEL
 
     try:
-        from faster_whisper import WhisperModel
+        importlib.invalidate_caches()
+        from funasr_onnx import Paraformer
     except Exception as e:
         raise RuntimeError(
-            "缺少 faster_whisper，请先安装 Python 依赖: pip install faster-whisper"
+            "缺少 funasr_onnx，请先安装 Python 依赖: pip install funasr-onnx"
         ) from e
 
-    model_size = os.environ.get("LOGCAT_AGENT_WHISPER_MODEL")
-    if not model_size:
-        downloaded_turbo = ensure_whisper_model_archive(
-            DOWNLOADED_WHISPER_TURBO_MODEL_PATH,
-            "LOGCAT_AGENT_WHISPER_TURBO_MODEL_URL",
+    env_model_dir = os.environ.get("LOGCAT_AGENT_FUNASR_MODEL_DIR", "").strip()
+    if env_model_dir:
+        model_dir = env_model_dir
+    elif has_funasr_model_files(LOCAL_FUNASR_MODEL_PATH):
+        model_dir = LOCAL_FUNASR_MODEL_PATH
+    else:
+        ensure_model_bundle()
+        model_dir = DOWNLOADED_FUNASR_MODEL_PATH
+
+    if not has_funasr_model_files(model_dir):
+        raise FileNotFoundError(
+            "本地 FunASR 字幕模型不存在。请把模型放到 "
+            f"{LOCAL_FUNASR_MODEL_PATH}，或设置 LOGCAT_AGENT_MODEL_BUNDLE_URL "
+            "为包含 OCR 和 FunASR 字幕模型的 zip 地址后重启应用。"
         )
-        downloaded_small = ensure_whisper_model_archive(
-            DOWNLOADED_WHISPER_MODEL_PATH,
-            "LOGCAT_AGENT_WHISPER_SMALL_MODEL_URL",
-        )
 
-        if downloaded_turbo:
-            model_size = downloaded_turbo
-        elif downloaded_small:
-            model_size = downloaded_small
-        elif has_whisper_model_files(DEFAULT_WHISPER_TURBO_MODEL_PATH):
-            model_size = DEFAULT_WHISPER_TURBO_MODEL_PATH
-        elif has_whisper_model_files(DEFAULT_WHISPER_MODEL_PATH):
-            model_size = DEFAULT_WHISPER_MODEL_PATH
-        else:
-            raise FileNotFoundError(
-                "本地 Whisper 模型不存在。请设置 LOGCAT_AGENT_WHISPER_TURBO_MODEL_URL "
-                "或 LOGCAT_AGENT_WHISPER_SMALL_MODEL_URL 为模型压缩包下载地址后重启应用。"
-            )
-    device = os.environ.get("LOGCAT_AGENT_WHISPER_DEVICE", "").strip().lower()
-    if device not in {"cuda", "cpu"}:
-        device = "cpu"
-    compute_type = "float16" if device == "cuda" else "int8"
-
-    WHISPER_MODEL = WhisperModel(
-        model_size,
-        device=device,
-        compute_type=compute_type,
+    FUNASR_MODEL = Paraformer(
+        model_dir,
+        batch_size=int(os.environ.get("LOGCAT_AGENT_FUNASR_BATCH_SIZE", "1")),
+        quantize=os.environ.get("LOGCAT_AGENT_FUNASR_QUANTIZE", "true").lower()
+        not in {"0", "false", "no"},
     )
+    FUNASR_MODEL_PATH = model_dir
 
-    logger.info(
-        "Faster-Whisper 加载成功 model=%s device=%s compute_type=%s",
-        model_size,
-        device,
-        compute_type,
-    )
+    logger.info("FunASR Paraformer 加载成功 model=%s", model_dir)
 
-    return WHISPER_MODEL
+    return FUNASR_MODEL
 
 
 def normalize_bug_description(segments):
@@ -399,11 +265,87 @@ def normalize_bug_description(segments):
 
     text = "，".join(texts)
     text = re.sub(r"\s+", "", text)
+    text = polish_asr_bug_text(text)
     text = re.sub(r"，+", "，", text).strip("，。 ")
 
     if text and text[-1] not in "。！？!?":
         text += "。"
 
+    return text
+
+
+CHINESE_NUMERAL_VALUES = {
+    "零": 0,
+    "〇": 0,
+    "一": 1,
+    "二": 2,
+    "两": 2,
+    "三": 3,
+    "四": 4,
+    "五": 5,
+    "六": 6,
+    "七": 7,
+    "八": 8,
+    "九": 9,
+}
+
+
+def parse_chinese_number(text):
+    if not text:
+        return None
+
+    if text in CHINESE_NUMERAL_VALUES:
+        return CHINESE_NUMERAL_VALUES[text]
+
+    if "十" in text:
+        left, right = text.split("十", 1)
+        tens = CHINESE_NUMERAL_VALUES.get(left, 1 if not left else None)
+        ones = CHINESE_NUMERAL_VALUES.get(right, 0 if not right else None)
+        if tens is None or ones is None:
+            return None
+        return tens * 10 + ones
+
+    digits = []
+    for char in text:
+        if char not in CHINESE_NUMERAL_VALUES:
+            return None
+        digits.append(str(CHINESE_NUMERAL_VALUES[char]))
+
+    return int("".join(digits)) if digits else None
+
+
+def normalize_spoken_decimal(match):
+    integer = parse_chinese_number(match.group(1))
+    decimal = parse_chinese_number(match.group(2))
+
+    if integer is None or decimal is None:
+        return match.group(0)
+
+    return f"{integer}.{decimal:02d}"
+
+
+def polish_asr_bug_text(text):
+    text = re.sub(r"[嗯啊呃]+", "", text)
+    text = re.sub(
+        r"([零〇一二两三四五六七八九十]{1,3})点([零〇一二两三四五六七八九十]{1,3})",
+        normalize_spoken_decimal,
+        text,
+    )
+
+    replacements = [
+        ("然后切换就会", "然后切换，就会"),
+        ("切换就会", "切换，就会"),
+        ("卡到", "卡到"),
+        ("界面此时", "界面，此时"),
+        ("视图需要", "视图，需要"),
+        ("重新点击能切换", "重新点击才能切换"),
+    ]
+
+    for source, target in replacements:
+        text = text.replace(source, target)
+
+    text = re.sub(r"(4\.\d{2})(?=打开)", r"\1，", text)
+    text = re.sub(r"(才能切换)(4\.\d{2})", r"\1。\n\2", text)
     return text
 
 
@@ -420,47 +362,93 @@ def subtitles_output_path(audio_path):
     return os.path.join(SUBTITLE_ROOT, f"{base}_subtitles.json")
 
 
+def audio_duration_seconds(audio_path):
+    try:
+        with contextlib.closing(wave.open(audio_path, "rb")) as wav:
+            frames = wav.getnframes()
+            rate = wav.getframerate()
+            return frames / float(rate or 1)
+    except Exception:
+        return 0.0
+
+
+def normalize_funasr_results(result):
+    if isinstance(result, list):
+        return result
+
+    if isinstance(result, dict):
+        return [result]
+
+    return [{"text": str(result or "")}]
+
+
+def funasr_sentence_segments(result, duration):
+    subtitles = []
+    records = normalize_funasr_results(result)
+
+    for record in records:
+        if not isinstance(record, dict):
+            text = keep_subtitle_display_text(str(record))
+            if text:
+                subtitles.append({"start": 0.0, "end": round(duration, 3), "text": text})
+            continue
+
+        sentence_info = record.get("sentence_info")
+        if isinstance(sentence_info, list) and sentence_info:
+            for sentence in sentence_info:
+                if not isinstance(sentence, dict):
+                    continue
+
+                text = keep_subtitle_display_text(sentence.get("text", ""))
+                if not text:
+                    continue
+
+                start = float(sentence.get("start", 0) or 0) / 1000.0
+                end = float(sentence.get("end", 0) or 0) / 1000.0
+                if end <= start:
+                    end = min(start + 2.0, duration) if duration > 0 else start + 2.0
+
+                subtitles.append({
+                    "start": round(start, 3),
+                    "end": round(end, 3),
+                    "text": text,
+                })
+
+        text = keep_subtitle_display_text(record.get("text", ""))
+        if not text:
+            preds = record.get("preds")
+            if isinstance(preds, (list, tuple)) and preds:
+                text = keep_subtitle_display_text(preds[0])
+            elif isinstance(preds, str):
+                text = keep_subtitle_display_text(preds)
+
+        if text and not subtitles:
+            subtitles.append({"start": 0.0, "end": round(duration, 3), "text": text})
+
+    return subtitles
+
+
 def transcribe_audio(audio_path):
     if not os.path.exists(audio_path):
         raise FileNotFoundError(f"音频文件不存在: {audio_path}")
 
-    model = get_whisper_model()
-
-    segments_iter, info = model.transcribe(
-        audio_path,
-        language="zh",
-        vad_filter=True,
-        beam_size=int(os.environ.get("LOGCAT_AGENT_WHISPER_BEAM_SIZE", "5")),
-        best_of=int(os.environ.get("LOGCAT_AGENT_WHISPER_BEST_OF", "5")),
-        patience=1.2,
-        condition_on_previous_text=True,
-        initial_prompt="以下是中文车机操作录屏的语音字幕，内容可能包含泊车辅助、摄像机视图、APA、AVM、摄像机、重新电机切换等词。",
+    model = get_funasr_model()
+    duration = audio_duration_seconds(audio_path)
+    result = model(
+        [audio_path],
+        sentence_timestamp=True,
     )
-
-    subtitles = []
-
-    for segment in segments_iter:
-        text = keep_subtitle_display_text(segment.text)
-
-        if not text:
-            continue
-
-        subtitles.append({
-            "start": round(float(segment.start), 3),
-            "end": round(float(segment.end), 3),
-            "text": text,
-        })
+    subtitles = funasr_sentence_segments(result, duration)
 
     bug_description = normalize_bug_description(subtitles)
     output_path = subtitles_output_path(audio_path)
 
     payload = {
         "audio_path": audio_path,
-        "language": getattr(info, "language", "zh"),
-        "language_probability": round(
-            float(getattr(info, "language_probability", 0.0)),
-            4,
-        ),
+        "language": "zh",
+        "language_probability": 1.0,
+        "asr_backend": "funasr",
+        "asr_model": FUNASR_MODEL_PATH,
         "bug_description": bug_description,
         "subtitles": subtitles,
     }
@@ -1990,17 +1978,18 @@ def debug_path():
         "debug_root": DEBUG_ROOT,
         "default_extract_dir": DEFAULT_EXTRACT_DIR,
         "subtitle_root": SUBTITLE_ROOT,
-        "model_path": MODEL_PATH,
-        "model_exists": os.path.exists(MODEL_PATH),
-        "runtime_model_path": RUNTIME_MODEL_PATH,
-        "runtime_model_exists": os.path.exists(RUNTIME_MODEL_PATH),
+        "ocr_onnx_model_path": ONNX_MODEL_PATH,
+        "ocr_onnx_model_exists": os.path.exists(ONNX_MODEL_PATH),
+        "runtime_model_path": OCR_RUNTIME.model_path,
+        "runtime_model_exists": os.path.exists(OCR_RUNTIME.model_path),
         "model_data_dir": MODEL_DATA_DIR,
-        "downloaded_whisper_turbo_exists": has_whisper_model_files(
-            DOWNLOADED_WHISPER_TURBO_MODEL_PATH,
-        ),
-        "downloaded_whisper_small_exists": has_whisper_model_files(
-            DOWNLOADED_WHISPER_MODEL_PATH,
-        ),
+        "local_funasr_model_path": LOCAL_FUNASR_MODEL_PATH,
+        "local_funasr_model_exists": has_funasr_model_files(LOCAL_FUNASR_MODEL_PATH),
+        "downloaded_funasr_model_path": DOWNLOADED_FUNASR_MODEL_PATH,
+        "downloaded_funasr_model_exists": has_funasr_model_files(DOWNLOADED_FUNASR_MODEL_PATH),
+        "funasr_model_path": LOCAL_FUNASR_MODEL_PATH if has_funasr_model_files(LOCAL_FUNASR_MODEL_PATH) else DOWNLOADED_FUNASR_MODEL_PATH,
+        "funasr_model_exists": has_funasr_model_files(LOCAL_FUNASR_MODEL_PATH) or has_funasr_model_files(DOWNLOADED_FUNASR_MODEL_PATH),
+        "asr_backend": "funasr",
         "ide_cache_path": IDE_CACHE_PATH,
         "android_studio_commands": android_studio_commands(),
         "device": DEVICE,

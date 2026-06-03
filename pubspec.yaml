@@ -31,9 +31,6 @@ dependencies:
   flutter:
     sdk: flutter
 
-  # The following adds the Cupertino Icons font to your application.
-  # Use with the CupertinoIcons class for iOS style icons.
-  cupertino_icons: ^1.0.8
   desktop_drop: ^0.4.4      # 处理文件拖拽
   media_kit: ^1.1.10         # 视频播放核心
   media_kit_video: ^1.1.10   # 视频渲染组件
@@ -42,7 +39,6 @@ dependencies:
   media_kit_libs_linux: ^1.1.10
   archive: ^3.6.1
   shared_preferences: ^2.2.0  # 🎯 引入本地持久化核心插件
-  path_provider: ^2.1.0  # 🚀 确保这一行在里面
   file_picker: ^8.0.0
   rust_lib_debugvideoagent:
     path: rust_builder

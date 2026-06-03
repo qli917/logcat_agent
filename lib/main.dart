@@ -292,6 +292,23 @@ class _DropAreaState extends State<DropArea> {
     if (response.statusCode != 200 || !data.containsKey("subtitle_root")) {
       throw Exception("当前 Python 服务不支持语音字幕接口，请重启应用，或停止旧的 5000 端口服务后再试。");
     }
+
+    if ((data["asr_backend"] ?? "").toString() != "funasr") {
+      throw Exception(
+        "当前 5000 端口上的 Python 服务不是 FunASR 版本。请先停止旧的 python/video.py 进程后重启应用。",
+      );
+    }
+
+    if (data["funasr_model_exists"] == false) {
+      final modelPath = (data["funasr_model_path"] ?? "").toString();
+      final localModelPath = (data["local_funasr_model_path"] ?? "").toString();
+      final expectedPath = localModelPath.isNotEmpty ? localModelPath : modelPath;
+      throw Exception(
+        expectedPath.isEmpty
+            ? "当前 Python 服务没有找到 FunASR 字幕模型，请重启应用后再试。"
+            : "当前 Python 服务没有找到 FunASR 字幕模型: $expectedPath",
+      );
+    }
   }
 
   String fileName(String? path) {
@@ -604,7 +621,7 @@ class _DropAreaState extends State<DropArea> {
       if (_isStaleVoiceJob(currentVoiceJobId, targetVideoPath)) return;
 
       trySetState(() {
-        voiceStatus = "正在识别语音字幕，首次加载 Whisper 可能较慢...";
+        voiceStatus = "正在识别语音字幕，首次加载 FunASR 可能较慢...";
       });
 
       final uri = Uri.parse(
@@ -639,6 +656,8 @@ class _DropAreaState extends State<DropArea> {
         _transcribingVideoPath = null;
         _insertLog(
           "语音识别完成\n音频: $audioPath\n字幕: ${subtitlesPath ?? ""}\n"
+          "ASR: ${(data['asr_backend'] ?? '').toString()}\n"
+          "模型: ${(data['asr_model'] ?? '').toString()}\n"
           "字幕片段: ${subtitles.length}\n\nBug描述:\n$bugDescription",
         );
       });

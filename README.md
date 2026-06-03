@@ -83,7 +83,43 @@ nvidia-*
 triton
 ```
 
-OCR inference uses `onnxruntime` and `timestamp_crnn_best.onnx`; PyTorch is only needed on the training machine to train/export the model.
+OCR inference uses `onnxruntime` and `timestamp_crnn_best.onnx`; subtitles use the FunASR ONNX runtime. PyTorch is only needed on the training machine to train/export the OCR model.
+
+During development, the local FunASR model can live next to the OCR model:
+
+```text
+pythonai/
+  timestamp_crnn_best.onnx
+  funasr-paraformer-zh/
+    config.yaml
+    model_quant.onnx
+    tokens.json
+    ...
+```
+
+All runtime models can be installed from one downloadable archive:
+
+```bash
+./scripts/install_models.sh https://example.com/logagent-models.zip
+```
+
+Expected archive layout:
+
+```text
+logagent-models/
+  timestamp_crnn_best.onnx
+  funasr-paraformer-zh/
+    config.yaml
+    model.onnx or model_quant.onnx
+    tokens.txt or tokens.json
+    ...
+```
+
+At runtime the same archive can be configured with:
+
+```bash
+export LOGCAT_AGENT_MODEL_BUNDLE_URL=https://example.com/logagent-models.zip
+```
 
 Supported formats:
 
@@ -274,8 +310,8 @@ Root Cause Report
 
 ### AI
 
-- PyTorch
-- Faster-Whisper
+- ONNXRuntime
+- FunASR
 - ChatGPT
 
 ### Search

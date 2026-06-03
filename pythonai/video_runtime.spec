@@ -26,8 +26,7 @@ a = Analysis(
     binaries=[],
     datas=[],
     hiddenimports=[
-        *collect_submodules("faster_whisper"),
-        *collect_submodules("ctranslate2"),
+        *collect_submodules("funasr_onnx"),
         *collect_submodules("onnxruntime"),
     ],
     hookspath=[],

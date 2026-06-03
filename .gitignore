@@ -60,6 +60,7 @@ build/
 logs/
 .logs/
 log_hunter_extracted/
+pythonai/debug_ocr/
 
 # Python
 __pycache__/
@@ -69,7 +70,9 @@ __pycache__/
 .env
 .venv/
 venv/
+.numba_cache/
 log_hunter_subtitles/
+debug_orc/
 
 # Rust
 target/
@@ -77,6 +80,9 @@ rust/target/
 rust_builder/target/
 
 # Model files
+logagent_models/
+pythonai/funasr-paraformer-zh/
+pythonai/.modelscope_cache/
 *.pt
 *.pth
 *.onnx
