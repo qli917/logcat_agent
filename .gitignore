@@ -95,6 +95,8 @@ pythonai/.modelscope_cache/
 *.wav
 *.bin
 *.json
+*.zip
+*.exe
 # OS
 .DS_Store
 Thumbs.db

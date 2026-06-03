@@ -5,6 +5,7 @@
 list(APPEND FLUTTER_PLUGIN_LIST
   bitsdojo_window_windows
   desktop_drop
+  media_kit_libs_windows_video
   media_kit_video
   volume_controller
 )
