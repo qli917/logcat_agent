@@ -32,7 +32,7 @@ Flutter • Rust • Python • OCR
 - 🔍 Locate Logcat entries by timestamp and tag
 - 📝 Open Sublime Text at the exact log line
 - 🖥 Flutter desktop UI
-- 🤖 CRNN-based OCR model powered by PyTorch
+- 🤖 CRNN-based OCR model powered by ONNX Runtime
 
 ---
 
@@ -110,9 +110,9 @@ Sublime Text
 - Rust
 - Python
 
-### AI
+### AI Runtime
 
-- PyTorch
+- ONNX Runtime
 - CRNN OCR
 
 ### Built-in FFmpeg

@@ -79,82 +79,18 @@ def ensure_optional_file_from_url(target_path, url_env_name):
 
 
 class OcrRuntime:
-    def __init__(self, backend, model_path, alphabet, img_h, img_w, session=None, torch_model=None, torch_module=None):
+    def __init__(self, backend, model_path, alphabet, img_h, img_w, session=None):
         self.backend = backend
         self.model_path = model_path
         self.alphabet = alphabet
         self.img_h = int(img_h)
         self.img_w = int(img_w)
         self.session = session
-        self.torch_model = torch_model
-        self.torch = torch_module
         self.input_name = session.get_inputs()[0].name if session else ""
         self.output_name = session.get_outputs()[0].name if session else ""
 
     def predict(self, input_array):
-        if self.backend == "onnx":
-            return self.session.run([self.output_name], {self.input_name: input_array})[0]
-
-        tensor = self.torch.from_numpy(input_array).to(DEVICE)
-        with self.torch.no_grad():
-            return self.torch_model(tensor).detach().cpu().numpy()
-
-
-def build_torch_crnn(torch_module, num_classes):
-    class TorchCrnn(torch_module.nn.Module):
-        def __init__(self):
-            super().__init__()
-
-            self.cnn = torch_module.nn.Sequential(
-                torch_module.nn.Conv2d(1, 64, 3, 1, 1),
-                torch_module.nn.BatchNorm2d(64),
-                torch_module.nn.ReLU(True),
-                torch_module.nn.MaxPool2d(2, 2),
-
-                torch_module.nn.Conv2d(64, 128, 3, 1, 1),
-                torch_module.nn.BatchNorm2d(128),
-                torch_module.nn.ReLU(True),
-                torch_module.nn.MaxPool2d(2, 2),
-
-                torch_module.nn.Conv2d(128, 256, 3, 1, 1),
-                torch_module.nn.BatchNorm2d(256),
-                torch_module.nn.ReLU(True),
-
-                torch_module.nn.Conv2d(256, 256, 3, 1, 1),
-                torch_module.nn.BatchNorm2d(256),
-                torch_module.nn.ReLU(True),
-                torch_module.nn.MaxPool2d((2, 1), (2, 1)),
-
-                torch_module.nn.Conv2d(256, 512, 3, 1, 1),
-                torch_module.nn.BatchNorm2d(512),
-                torch_module.nn.ReLU(True),
-
-                torch_module.nn.Conv2d(512, 512, 3, 1, 1),
-                torch_module.nn.BatchNorm2d(512),
-                torch_module.nn.ReLU(True),
-                torch_module.nn.MaxPool2d((2, 1), (2, 1)),
-            )
-
-            self.rnn = torch_module.nn.LSTM(
-                input_size=512 * 4,
-                hidden_size=256,
-                num_layers=2,
-                bidirectional=True,
-                batch_first=False,
-            )
-
-            self.fc = torch_module.nn.Linear(512, num_classes)
-
-        def forward(self, x):
-            conv = self.cnn(x)
-            b, c, h, w = conv.size()
-            conv = conv.permute(3, 0, 1, 2)
-            conv = conv.contiguous().view(w, b, c * h)
-            recurrent, _ = self.rnn(conv)
-            output = self.fc(recurrent)
-            return output
-
-    return TorchCrnn()
+        return self.session.run([self.output_name], {self.input_name: input_array})[0]
 
 
 def load_ocr_runtime():

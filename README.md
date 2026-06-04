@@ -73,17 +73,10 @@ The distributed Python service should be built from the runtime-only dependency 
 ./scripts/build_python_runtime.sh
 ```
 
-This runtime intentionally excludes training/CUDA packages:
+This runtime intentionally excludes training/CUDA packages, which now live in
+the separate training workspace at `/home/xjmz/Ai/logcatagent`.
 
-```text
-torch
-torchvision
-torchaudio
-nvidia-*
-triton
-```
-
-OCR inference uses `onnxruntime` and `timestamp_crnn_best.onnx`; subtitles use the FunASR ONNX runtime. PyTorch is only needed on the training machine to train/export the OCR model.
+OCR inference uses `onnxruntime` and `timestamp_crnn_best.onnx`; subtitles use the FunASR ONNX runtime.
 
 ### Built-in FFmpeg
 
