@@ -61,6 +61,219 @@ class MyApp extends StatelessWidget {
   }
 }
 
+class _SettingsValues {
+  final String sourceDir;
+  final String openApiSk;
+  final String jiraEmail;
+  final String jiraToken;
+
+  const _SettingsValues({
+    required this.sourceDir,
+    required this.openApiSk,
+    required this.jiraEmail,
+    required this.jiraToken,
+  });
+}
+
+class _SettingsDialog extends StatefulWidget {
+  final String sourceDir;
+  final String openApiSk;
+  final String jiraEmail;
+  final String jiraToken;
+
+  const _SettingsDialog({
+    required this.sourceDir,
+    required this.openApiSk,
+    required this.jiraEmail,
+    required this.jiraToken,
+  });
+
+  @override
+  State<_SettingsDialog> createState() => _SettingsDialogState();
+}
+
+class _SettingsDialogState extends State<_SettingsDialog> {
+  late final TextEditingController sourceDirController;
+  late final TextEditingController openApiSkController;
+  late final TextEditingController jiraEmailController;
+  late final TextEditingController jiraTokenController;
+
+  bool obscureOpenApiSk = true;
+  bool obscureJiraToken = true;
+
+  @override
+  void initState() {
+    super.initState();
+    sourceDirController = TextEditingController(text: widget.sourceDir);
+    openApiSkController = TextEditingController(text: widget.openApiSk);
+    jiraEmailController = TextEditingController(text: widget.jiraEmail);
+    jiraTokenController = TextEditingController(text: widget.jiraToken);
+  }
+
+  @override
+  void dispose() {
+    sourceDirController.dispose();
+    openApiSkController.dispose();
+    jiraEmailController.dispose();
+    jiraTokenController.dispose();
+    super.dispose();
+  }
+
+  InputDecoration _fieldDecoration({
+    required String labelText,
+    required IconData icon,
+    String? hintText,
+    Widget? suffixIcon,
+  }) {
+    return InputDecoration(
+      labelText: labelText,
+      hintText: hintText,
+      prefixIcon: Icon(icon, size: 18),
+      suffixIcon: suffixIcon,
+      filled: true,
+      fillColor: const Color(0xff0c1624),
+      border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(8),
+        borderSide: const BorderSide(color: Color(0xff2c405d)),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(8),
+        borderSide: const BorderSide(color: Color(0xff3b82f6), width: 1.2),
+      ),
+    );
+  }
+
+  void _save() {
+    Navigator.of(context).pop(
+      _SettingsValues(
+        sourceDir: sourceDirController.text.trim(),
+        openApiSk: openApiSkController.text.trim(),
+        jiraEmail: jiraEmailController.text.trim(),
+        jiraToken: jiraTokenController.text.trim(),
+      ),
+    );
+  }
+
+  Future<void> _pickSourceDir() async {
+    final selected = await FilePicker.platform.getDirectoryPath(
+      dialogTitle: "选择项目源码目录",
+      initialDirectory: Directory(sourceDirController.text).existsSync()
+          ? sourceDirController.text
+          : Directory.current.path,
+    );
+
+    if (selected == null || !mounted) return;
+
+    setState(() {
+      sourceDirController.text = selected;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: const Color(0xff101c2b),
+      surfaceTintColor: Colors.transparent,
+      title: const Row(
+        children: [
+          Icon(Icons.settings_outlined, size: 20),
+          SizedBox(width: 8),
+          Text("设置"),
+        ],
+      ),
+      content: SizedBox(
+        width: 520,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: sourceDirController,
+              decoration: _fieldDecoration(
+                labelText: "源码路径",
+                hintText: Directory.current.path,
+                icon: Icons.source_outlined,
+                suffixIcon: IconButton(
+                  tooltip: "选择源码目录",
+                  onPressed: () {
+                    unawaited(_pickSourceDir());
+                  },
+                  icon: const Icon(Icons.folder_open, size: 18),
+                ),
+              ),
+            ),
+            const SizedBox(height: 14),
+            TextField(
+              controller: openApiSkController,
+              obscureText: obscureOpenApiSk,
+              decoration: _fieldDecoration(
+                labelText: "OpenAPI SK",
+                hintText: "sk-...",
+                icon: Icons.key_outlined,
+                suffixIcon: IconButton(
+                  tooltip: obscureOpenApiSk ? "显示" : "隐藏",
+                  onPressed: () {
+                    setState(() {
+                      obscureOpenApiSk = !obscureOpenApiSk;
+                    });
+                  },
+                  icon: Icon(
+                    obscureOpenApiSk
+                        ? Icons.visibility_outlined
+                        : Icons.visibility_off_outlined,
+                    size: 18,
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 14),
+            TextField(
+              controller: jiraEmailController,
+              keyboardType: TextInputType.emailAddress,
+              decoration: _fieldDecoration(
+                labelText: "Jira 邮箱",
+                hintText: "name@example.com",
+                icon: Icons.mail_outline,
+              ),
+            ),
+            const SizedBox(height: 14),
+            TextField(
+              controller: jiraTokenController,
+              obscureText: obscureJiraToken,
+              decoration: _fieldDecoration(
+                labelText: "Jira Token",
+                icon: Icons.vpn_key_outlined,
+                suffixIcon: IconButton(
+                  tooltip: obscureJiraToken ? "显示" : "隐藏",
+                  onPressed: () {
+                    setState(() {
+                      obscureJiraToken = !obscureJiraToken;
+                    });
+                  },
+                  icon: Icon(
+                    obscureJiraToken
+                        ? Icons.visibility_outlined
+                        : Icons.visibility_off_outlined,
+                    size: 18,
+                  ),
+                ),
+              ),
+              onSubmitted: (_) => _save(),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text("取消"),
+        ),
+        FilledButton(onPressed: _save, child: const Text("保存")),
+      ],
+    );
+  }
+}
+
 class SubtitleSegment {
   final double start;
   final double end;
@@ -109,7 +322,10 @@ class DropArea extends StatefulWidget {
 class _DropAreaState extends State<DropArea> {
   static const _tagKeywordCacheKey = "tag_keyword";
   static const _sourceDirCacheKey = "source_dir";
-  static const _pythonBaseUrl = "http://127.0.0.1:5000";
+  static const _openApiSkCacheKey = "openapi_sk";
+  static const _jiraEmailCacheKey = "jira_email";
+  static const _jiraTokenCacheKey = "jira_token";
+  static const _pythonBaseUrl = "http://localhost:5000";
   static const int _defaultRangeMs = 100;
 
   late final Player player = Player();
@@ -137,6 +353,9 @@ class _DropAreaState extends State<DropArea> {
   String bugDescription = "";
   String? subtitlesPath;
   String voiceStatus = "";
+  String openApiSk = "";
+  String jiraEmail = "";
+  String jiraToken = "";
 
   bool _isProcessing = false;
   bool _isVoiceProcessing = false;
@@ -161,6 +380,7 @@ class _DropAreaState extends State<DropArea> {
 
     _loadCachedTagKeyword();
     _loadCachedSourceDir();
+    _loadSettings();
     tagController.addListener(_saveTagKeyword);
 
     _positionSub = player.stream.position.listen((position) {
@@ -253,11 +473,61 @@ class _DropAreaState extends State<DropArea> {
     } catch (_) {}
   }
 
-  Future<void> _saveSourceDir(String path) async {
+  Future<void> _loadSettings() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setString(_sourceDirCacheKey, path);
+
+      if (!mounted || _disposed) return;
+
+      trySetState(() {
+        openApiSk = prefs.getString(_openApiSkCacheKey) ?? "";
+        jiraEmail = prefs.getString(_jiraEmailCacheKey) ?? "";
+        jiraToken = prefs.getString(_jiraTokenCacheKey) ?? "";
+      });
     } catch (_) {}
+  }
+
+  Future<void> _saveSettings({
+    required String sourceDir,
+    required String openApiSk,
+    required String jiraEmail,
+    required String jiraToken,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_sourceDirCacheKey, sourceDir);
+    await prefs.setString(_openApiSkCacheKey, openApiSk);
+    await prefs.setString(_jiraEmailCacheKey, jiraEmail);
+    await prefs.setString(_jiraTokenCacheKey, jiraToken);
+
+    trySetState(() {
+      sourceDirController.text = sourceDir;
+      this.openApiSk = openApiSk;
+      this.jiraEmail = jiraEmail;
+      this.jiraToken = jiraToken;
+    });
+  }
+
+  Future<void> _showSettingsDialog() async {
+    final settings = await showDialog<_SettingsValues>(
+      context: context,
+      builder: (context) => _SettingsDialog(
+        sourceDir: sourceDirController.text,
+        openApiSk: openApiSk,
+        jiraEmail: jiraEmail,
+        jiraToken: jiraToken,
+      ),
+    );
+
+    if (settings == null) {
+      return;
+    }
+
+    await _saveSettings(
+      sourceDir: settings.sourceDir,
+      openApiSk: settings.openApiSk,
+      jiraEmail: settings.jiraEmail,
+      jiraToken: settings.jiraToken,
+    );
   }
 
   Map<String, dynamic> _decodePythonJson(
@@ -1211,31 +1481,6 @@ class _DropAreaState extends State<DropArea> {
     );
   }
 
-  Future<void> _pickSourceDirectory() async {
-    try {
-      final selectedDirectory = await FilePicker.platform.getDirectoryPath(
-        dialogTitle: "选择项目源码目录",
-        initialDirectory: sourceDirController.text.trim().isEmpty
-            ? Directory.current.path
-            : sourceDirController.text.trim(),
-      );
-
-      if (selectedDirectory == null || _disposed || !mounted) return;
-
-      trySetState(() {
-        sourceDirController.text = selectedDirectory;
-      });
-
-      await _saveSourceDir(selectedDirectory);
-    } catch (e) {
-      if (_disposed || !mounted) return;
-
-      trySetState(() {
-        _insertLog("选择项目源码目录失败\n异常: $e");
-      });
-    }
-  }
-
   Map<String, dynamic> _entrySublime(ProcessLogEntry entry) {
     final flow = entry.flow;
     final sublime = flow?["sublime"];
@@ -1766,7 +2011,6 @@ class _DropAreaState extends State<DropArea> {
           children: [
             AppTitleBar(
               zipDirs: zipDirs,
-              sourceDirController: sourceDirController,
               selectedZipDir: selectedZipDir,
               tagController: tagController,
               isProcessing: _isProcessing,
@@ -1776,10 +2020,10 @@ class _DropAreaState extends State<DropArea> {
                 });
               },
               onStart: null,
-              onPickSourceDir: () {
-                unawaited(_pickSourceDirectory());
-              },
               onReset: _resetConditions,
+              onSettings: () {
+                unawaited(_showSettingsDialog());
+              },
             ),
             Expanded(
               child: Stack(

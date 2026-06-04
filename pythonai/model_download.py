@@ -54,6 +54,7 @@ def has_funasr_model_files(model_dir):
                 "config.yaml",
                 "config.yml",
                 "config.json",
+                "configuration.json",
             }
 
     return has_onnx and has_config

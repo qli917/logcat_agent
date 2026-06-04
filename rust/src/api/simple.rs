@@ -1,5 +1,5 @@
 use std::fs::{self, File, OpenOptions};
-use std::net::{SocketAddr, TcpStream};
+use std::net::{TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
@@ -175,8 +175,14 @@ pub fn init_python_engine() -> Result<(), String> {
 }
 
 fn python_service_ready() -> bool {
-    let addr: SocketAddr = "127.0.0.1:5000".parse().unwrap();
-    TcpStream::connect_timeout(&addr, Duration::from_millis(250)).is_ok()
+    "localhost:5000"
+        .to_socket_addrs()
+        .map(|addrs| {
+            addrs
+                .into_iter()
+                .any(|addr| TcpStream::connect_timeout(&addr, Duration::from_millis(250)).is_ok())
+        })
+        .unwrap_or(false)
 }
 
 fn python_log_path() -> PathBuf {
@@ -240,7 +246,7 @@ fn wait_for_python_service(child: &mut std::process::Child, log_path: &Path) -> 
     let _ = child.kill();
 
     Err(python_failure_message(
-        "Python OCR 服务启动超时，127.0.0.1:5000 未就绪",
+        "Python OCR 服务启动超时，localhost:5000 未就绪",
         log_path,
     ))
 }

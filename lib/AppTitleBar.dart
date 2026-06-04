@@ -3,26 +3,24 @@ import 'package:flutter/material.dart';
 
 class AppTitleBar extends StatelessWidget {
   final List<String> zipDirs;
-  final TextEditingController sourceDirController;
   final String? selectedZipDir;
   final TextEditingController tagController;
   final bool isProcessing;
   final ValueChanged<String?> onZipDirChanged;
   final VoidCallback? onStart;
-  final VoidCallback onPickSourceDir;
   final VoidCallback onReset;
+  final VoidCallback onSettings;
 
   const AppTitleBar({
     super.key,
     required this.zipDirs,
-    required this.sourceDirController,
     required this.selectedZipDir,
     required this.tagController,
     required this.isProcessing,
     required this.onZipDirChanged,
     required this.onStart,
-    required this.onPickSourceDir,
     required this.onReset,
+    required this.onSettings,
   });
 
   InputDecoration _fieldDecoration({
@@ -132,62 +130,6 @@ class AppTitleBar extends StatelessWidget {
                   child: Row(
                     children: [
                       SizedBox(
-                        width: 270,
-                        child: Container(
-                          height: 36,
-                          padding: const EdgeInsets.all(3),
-                          decoration: BoxDecoration(
-                            color: const Color(0xff0c1624),
-                            borderRadius: BorderRadius.circular(10),
-                            border: Border.all(color: const Color(0xff27415f)),
-                          ),
-                          child: TextField(
-                            controller: sourceDirController,
-                            readOnly: true,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 12,
-                            ),
-                            decoration: _fieldDecoration(
-                              hintText: "项目源码目录",
-                              prefixIcon: const Icon(
-                                Icons.source_outlined,
-                                size: 16,
-                                color: Colors.white54,
-                              ),
-                              horizontalPadding: 10,
-                              verticalPadding: 7,
-                            ),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 6),
-                      Tooltip(
-                        message: "选择项目源码目录",
-                        child: SizedBox(
-                          width: 36,
-                          height: 36,
-                          child: OutlinedButton(
-                            onPressed: onPickSourceDir,
-                            style:
-                                _actionStyle(
-                                  background: const Color(0xff122033),
-                                  foreground: Colors.white70,
-                                  border: const Color(0xff2c405d),
-                                ).copyWith(
-                                  padding: const WidgetStatePropertyAll(
-                                    EdgeInsets.zero,
-                                  ),
-                                  minimumSize: const WidgetStatePropertyAll(
-                                    Size(36, 36),
-                                  ),
-                                ),
-                            child: const Icon(Icons.folder_open, size: 17),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      SizedBox(
                         width: 260,
                         child: PopupMenuButton<String>(
                           enabled: zipDirs.isNotEmpty,
@@ -283,6 +225,34 @@ class AppTitleBar extends StatelessWidget {
                             background: const Color(0xff122033),
                             foreground: Colors.white70,
                             border: const Color(0xff2c405d),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Tooltip(
+                        message: "设置",
+                        child: SizedBox(
+                          width: 36,
+                          height: 36,
+                          child: OutlinedButton(
+                            onPressed: onSettings,
+                            style:
+                                _actionStyle(
+                                  background: const Color(0xff122033),
+                                  foreground: Colors.white70,
+                                  border: const Color(0xff2c405d),
+                                ).copyWith(
+                                  padding: const WidgetStatePropertyAll(
+                                    EdgeInsets.zero,
+                                  ),
+                                  minimumSize: const WidgetStatePropertyAll(
+                                    Size(36, 36),
+                                  ),
+                                ),
+                            child: const Icon(
+                              Icons.settings_outlined,
+                              size: 17,
+                            ),
                           ),
                         ),
                       ),

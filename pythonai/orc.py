@@ -485,7 +485,7 @@ if __name__ == "__main__":
     flask_logging.getLogger("werkzeug").setLevel(logging.ERROR)
 
     app.run(
-        host="127.0.0.1",
+        host="localhost",
         port=5001,
         debug=False
     )

@@ -51,7 +51,7 @@ SUBTITLE_ROOT = os.path.join(PROJECT_ROOT, "log_hunter_subtitles")
 IDE_CACHE_PATH = os.path.join(PROJECT_ROOT, ".logagent_ide.json")
 OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
 OPENAI_MODEL = os.environ.get("LOGCAT_AGENT_OPENAI_MODEL", "gpt-5.5")
-OPENAI_PROXY_URL = os.environ.get("OPENAI_PROXY_URL", "http://127.0.0.1:7897").strip()
+OPENAI_PROXY_URL = os.environ.get("OPENAI_PROXY_URL", "http://localhost:7897").strip()
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "").strip()
 
 os.makedirs(DEBUG_ROOT, exist_ok=True)
@@ -2068,7 +2068,7 @@ if __name__ == "__main__":
         logger.warning("未发现 Android Studio/IDEA 命令行工具")
 
     app.run(
-        host="127.0.0.1",
+        host="localhost",
         port=5000,
         debug=False,
     )
